@@ -1,0 +1,5 @@
+anthropic
+pillow
+imagehash
+python-docx
+requests
