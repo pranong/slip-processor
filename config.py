@@ -21,8 +21,9 @@ LOG_DIR        = f"{BASE_DIR}/logs"
 CLAUDE_MODEL   = "claude-sonnet-4-6"
 HASH_THRESHOLD = 8                                     # phash ≤ 8 ถือว่าซ้ำ
 
-# ── Line Notify ───────────────────────────────────────────────────────────────
-LINE_TOKEN     = "YOUR_LINE_NOTIFY_TOKEN"              # ← ใส่ token ของคุณ
+# ── Telegram Bot ──────────────────────────────────────────────────────────────
+TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN"    # ← จาก @BotFather
+TELEGRAM_CHAT_ID   = "YOUR_CHAT_ID"     # ← จาก getUpdates API
 
 # ── อื่นๆ ─────────────────────────────────────────────────────────────────────
 IMAGE_EXTS     = {".jpg", ".jpeg", ".png", ".webp", ".gif"}

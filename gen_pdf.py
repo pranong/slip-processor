@@ -110,13 +110,56 @@ def _set_cell_text(row_element, col_idx: int, text: str):
         para.append(run)
 
 
+def _replace_across_runs(paragraph, placeholder: str, value: str):
+    """แทน placeholder ที่อาจกระจายหลาย runs — merge เฉพาะ runs ที่มี placeholder"""
+    runs = paragraph.runs
+    if not runs:
+        return
+    full_text = "".join(r.text for r in runs)
+    if placeholder not in full_text:
+        return
+
+    # หาว่า placeholder เริ่มและจบที่ run ไหน
+    pos = full_text.index(placeholder)
+    end_pos = pos + len(placeholder)
+
+    char_count = 0
+    start_run = None
+    end_run = None
+    for i, r in enumerate(runs):
+        run_start = char_count
+        run_end = char_count + len(r.text)
+        if start_run is None and run_end > pos:
+            start_run = i
+        if run_end >= end_pos:
+            end_run = i
+            break
+        char_count = run_end
+
+    if start_run is None or end_run is None:
+        return
+
+    # รวมข้อความเฉพาะ runs ที่มี placeholder
+    merged = "".join(runs[i].text for i in range(start_run, end_run + 1))
+    merged = merged.replace(placeholder, value)
+
+    # ใส่กลับใน run แรกของกลุ่ม ลบ run ที่เหลือในกลุ่ม
+    runs[start_run].text = merged
+    for i in range(start_run + 1, end_run + 1):
+        runs[i].text = ""
+
+
 def _replace_text_in_doc(doc: DocxDocument, placeholder: str, value: str):
-    """แทน placeholder ใน paragraphs ทั้ง document"""
+    """แทน placeholder ทั่วทั้ง document (paragraphs + table cells)"""
     for para in doc.paragraphs:
         if placeholder in para.text:
-            for run in para.runs:
-                if placeholder in run.text:
-                    run.text = run.text.replace(placeholder, value)
+            _replace_across_runs(para, placeholder, value)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    if placeholder in para.text:
+                        _replace_across_runs(para, placeholder, value)
 
 
 def fill_template(slips: list[dict], day_str: str, month_name: str,
@@ -182,15 +225,8 @@ def fill_template(slips: list[dict], day_str: str, month_name: str,
     total_str    = f"{total:,.2f}"
     total_th_str = baht_text(total)
 
-    # แทน placeholders ในตาราง
-    for row in table.rows:
-        for cell in row.cells:
-            for para in cell.paragraphs:
-                for run in para.runs:
-                    if "$intSumTotal" in run.text:
-                        run.text = run.text.replace("$intSumTotal", total_str)
-
-    # แทน placeholders นอกตาราง
+    # แทน placeholders ทั้งหมด (รองรับ split across runs)
+    _replace_text_in_doc(doc, "$intSumTotal", total_str)
     _replace_text_in_doc(doc, "$thSumTotal", total_th_str)
 
     # บันทึก docx ชั่วคราว

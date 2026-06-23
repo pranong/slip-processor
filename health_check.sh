@@ -3,14 +3,15 @@
 # crontab: */5 * * * * /home/pi/slip-processor/health_check.sh
 
 BASE="/home/pi/slip-processor"
-LINE_TOKEN="YOUR_LINE_NOTIFY_TOKEN"   # ← ใส่ token ของคุณ
+TELEGRAM_BOT_TOKEN="YOUR_BOT_TOKEN"   # ← จาก @BotFather
+TELEGRAM_CHAT_ID="YOUR_CHAT_ID"        # ← จาก getUpdates API
 LOG="$BASE/logs/health.log"
 
 send_line() {
     if [ "$LINE_TOKEN" != "YOUR_LINE_NOTIFY_TOKEN" ]; then
-        curl -s -X POST https://notify-api.line.me/api/notify \
-            -H "Authorization: Bearer $LINE_TOKEN" \
-            -d "message=$1" > /dev/null 2>&1
+        curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=$1" > /dev/null 2>&1
     fi
 }
 

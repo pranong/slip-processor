@@ -1,41 +1,49 @@
 """
-notify.py — ส่งสรุปผลเข้า Line Notify
+notify.py — ส่งแจ้งเตือนผ่าน Telegram Bot
+วิธีสร้าง Bot:
+  1. คุยกับ @BotFather ใน Telegram
+  2. พิมพ์ /newbot → ตั้งชื่อ → ได้ BOT_TOKEN
+  3. คุยกับ bot ของคุณก่อน 1 ครั้ง แล้วเปิด
+     https://api.telegram.org/bot<TOKEN>/getUpdates
+     → เอา "id" ใน chat มาใส่ CHAT_ID
 """
 
 import requests
-from config import LINE_TOKEN
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+
+API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
 
 def send(message: str):
-    """ส่งข้อความเข้า Line Notify"""
-    if not LINE_TOKEN or LINE_TOKEN == "YOUR_LINE_NOTIFY_TOKEN":
-        print(f"[Line] (token ยังไม่ตั้ง)\n{message}")
+    """ส่งข้อความเข้า Telegram"""
+    if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN":
+        print(f"[Telegram] (token ยังไม่ตั้ง)\n{message}")
         return False
     try:
         r = requests.post(
-            "https://notify-api.line.me/api/notify",
-            headers={"Authorization": f"Bearer {LINE_TOKEN}"},
-            data={"message": message},
+            API_URL,
+            json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": message,
+                "parse_mode": "HTML",
+            },
             timeout=10,
         )
         return r.status_code == 200
     except Exception as e:
-        print(f"[Line] error: {e}")
+        print(f"[Telegram] error: {e}")
         return False
 
 
 def build_summary_message(sort_result: dict, gen_result: dict) -> str:
-    """สร้างข้อความสรุปสำหรับ Line"""
     lines = [
-        "",
-        "✅ Slip Processor เสร็จแล้ว",
+        "✅ <b>Slip Processor เสร็จแล้ว</b>",
         "─────────────────",
         f"📥 รูปใหม่      : {sort_result.get('new', 0)}",
         f"⚠️  ซ้ำ          : {sort_result.get('duplicate', 0)}",
         f"❓ จัดไม่ได้    : {sort_result.get('unclassified', 0)}",
         f"📄 gen PDF     : {gen_result.get('new', 0)}",
     ]
-
     if gen_result.get("failed", 0):
         lines.append(f"❌ gen ล้มเหลว : {gen_result['failed']}")
 
@@ -50,17 +58,15 @@ def build_summary_message(sort_result: dict, gen_result: dict) -> str:
 
 
 def build_unclassified_message(sort_result: dict) -> str:
-    """แจ้งเตือนรูปที่จัดไม่ได้ ให้ไปจัดการ manual"""
     unclass = [d for d in sort_result.get("details", []) if d.get("status") == "unclassified"]
     if not unclass:
         return ""
     lines = [
-        "",
-        f"⚠️ มี {len(unclass)} รูปที่อ่านไม่ได้",
-        "กรุณาจัดการ manual ใน folder unclassified/",
+        f"⚠️ <b>มี {len(unclass)} รูปที่อ่านไม่ได้</b>",
+        "กรุณาจัดการ manual ใน folder <code>unclassified/</code>",
         "─────────────────",
     ]
-    for u in unclass[:10]:  # แสดงแค่ 10 รายการแรก
+    for u in unclass[:10]:
         lines.append(f"  - {u['file']}")
     if len(unclass) > 10:
         lines.append(f"  ... อีก {len(unclass) - 10} ไฟล์")
@@ -68,5 +74,4 @@ def build_unclassified_message(sort_result: dict) -> str:
 
 
 def send_mount_alert(mount_point: str, status: str):
-    """แจ้งเตือน mount หลุด"""
-    send(f"\n🔴 Mount Alert\n{mount_point}\nสถานะ: {status}\nกำลัง remount...")
+    send(f"🔴 <b>Mount Alert</b>\n<code>{mount_point}</code>\nสถานะ: {status}\nกำลัง remount...")
