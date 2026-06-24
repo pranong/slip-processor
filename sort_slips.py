@@ -150,7 +150,8 @@ def run() -> dict:
 
     def process_one(args):
         i, img = args
-        print(f"[{i:4d}/{len(images)}] {img.name}", end=" ... ")
+        try:
+            print(f"[{i:4d}/{len(images)}] {img.name}", end=" ... ")
 
         # ── เช็คซ้ำ ──
         phash = get_phash(img)
@@ -181,7 +182,7 @@ def run() -> dict:
         day        = info["day"]
         month_name = MONTH_MAP.get(month, f"{month:02d}")
         day_str    = f"{day:02d}"
-        year_str   = str(year + 543)
+        year_str   = str(year)
 
         dest_dir = data / year_str / month_name / day_str / "images"
         dest_img = safe_copy(img, dest_dir)
@@ -208,6 +209,11 @@ def run() -> dict:
                 "day": day, "month": month, "year": year,
                 "amount": info.get("amount"),
             })
+        except Exception as e:
+            print(f"❌ error: {e}")
+            import traceback; traceback.print_exc()
+            with lock:
+                results["failed"] += 1
 
     # ── รัน parallel 5 รูปพร้อมกัน ──
     with ThreadPoolExecutor(max_workers=5) as executor:
