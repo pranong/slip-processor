@@ -153,62 +153,62 @@ def run() -> dict:
         try:
             print(f"[{i:4d}/{len(images)}] {img.name}", end=" ... ")
 
-        # ── เช็คซ้ำ ──
-        phash = get_phash(img)
-        if phash:
-            with lock:
-                dup = find_duplicate(phash, hash_db)
-            if dup:
-                print(f"⚠️  ซ้ำกับ '{dup['filename']}'")
+            # ── เช็คซ้ำ ──
+            phash = get_phash(img)
+            if phash:
                 with lock:
-                    results["duplicate"] += 1
+                    dup = find_duplicate(phash, hash_db)
+                if dup:
+                    print(f"⚠️  ซ้ำกับ '{dup['filename']}'")
+                    with lock:
+                        results["duplicate"] += 1
+                    return
+
+            # ── อ่าน slip (Claude API) ──
+            info = read_slip(client, img)
+
+            if info is None:
+                unclass_dir = data / "unclassified"
+                dest = safe_copy(img, unclass_dir)
+                print(f"❓ อ่านไม่ได้ → {dest}")
+                with lock:
+                    results["unclassified"] += 1
+                    results["details"].append({"file": img.name, "status": "unclassified"})
                 return
 
-        # ── อ่าน slip (Claude API) ──
-        info = read_slip(client, img)
+            # ── แยก folder ──
+            year       = info["year_ce"]
+            month      = info["month"]
+            day        = info["day"]
+            month_name = MONTH_MAP.get(month, f"{month:02d}")
+            day_str    = f"{day:02d}"
+            year_str   = str(year)
 
-        if info is None:
-            unclass_dir = data / "unclassified"
-            dest = safe_copy(img, unclass_dir)
-            print(f"❓ อ่านไม่ได้ → {dest}")
+            dest_dir = data / year_str / month_name / day_str / "images"
+            dest_img = safe_copy(img, dest_dir)
+
+            # ── บันทึก slip_data JSON ──
+            slip_json = dest_img.with_suffix(".json")
+            info["source_file"]   = img.name
+            info["dest_file"]     = dest_img.name
+            info["pdf_generated"] = False
+            slip_json.write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            print(f"📅 {day_str}/{month_name}/{year} ฿{info.get('amount', 0):,.0f} → {dest_dir}")
+
             with lock:
-                results["unclassified"] += 1
-                results["details"].append({"file": img.name, "status": "unclassified"})
-            return
-
-        # ── แยก folder ──
-        year       = info["year_ce"]
-        month      = info["month"]
-        day        = info["day"]
-        month_name = MONTH_MAP.get(month, f"{month:02d}")
-        day_str    = f"{day:02d}"
-        year_str   = str(year)
-
-        dest_dir = data / year_str / month_name / day_str / "images"
-        dest_img = safe_copy(img, dest_dir)
-
-        # ── บันทึก slip_data JSON ──
-        slip_json = dest_img.with_suffix(".json")
-        info["source_file"]   = img.name
-        info["dest_file"]     = dest_img.name
-        info["pdf_generated"] = False
-        slip_json.write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        print(f"📅 {day_str}/{month_name}/{year} ฿{info.get('amount', 0):,.0f} → {dest_dir}")
-
-        with lock:
-            if phash:
-                hash_db[phash] = {
-                    "filename": img.name,
-                    "dest": str(dest_img),
-                    "day": day, "month": month, "year": year
-                }
-            results["new"] += 1
-            results["details"].append({
-                "file": img.name, "status": "ok",
-                "day": day, "month": month, "year": year,
-                "amount": info.get("amount"),
-            })
+                if phash:
+                    hash_db[phash] = {
+                        "filename": img.name,
+                        "dest": str(dest_img),
+                        "day": day, "month": month, "year": year
+                    }
+                results["new"] += 1
+                results["details"].append({
+                    "file": img.name, "status": "ok",
+                    "day": day, "month": month, "year": year,
+                    "amount": info.get("amount"),
+                })
         except Exception as e:
             print(f"❌ error: {e}")
             import traceback; traceback.print_exc()
