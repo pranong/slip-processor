@@ -126,8 +126,8 @@ def run_command(cmd: str):
         import traceback
         print(traceback.format_exc())
     finally:
+        global RUNNING
         with LOCK:
-            global RUNNING
             RUNNING = False
 
 
