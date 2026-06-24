@@ -5,21 +5,21 @@ telegram_bot.py — รับคำสั่งจาก Telegram แล้ว�
   /sort   — รัน sort_slips เท่านั้น
   /gen    — รัน gen_pdf เท่านั้น
   /status — เช็คสถานะ mount
+  /help   — ดูคำสั่งทั้งหมด
 """
 
 import time
 import requests
-import subprocess
 import threading
 from pathlib import Path
 from datetime import datetime
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, RAW_MOUNT, DATA_MOUNT
 
-API_URL  = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-OFFSET   = 0
-RUNNING  = False  # ป้องกันรันซ้อนกัน
-LOCK     = threading.Lock()
+API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+OFFSET  = 0
+RUNNING = False
+LOCK    = threading.Lock()
 
 
 def send(text: str):
@@ -56,40 +56,51 @@ def check_mounts() -> str:
     return "\n".join(lines)
 
 
-def run_command(cmd: str):
-    """รัน pipeline command ใน background thread"""
+def do_run(cmd: str):
     global RUNNING
-    with LOCK:
-        if RUNNING:
-            send("⚠️ กำลังรันอยู่แล้ว รอให้เสร็จก่อนนะครับ")
-            return
-        RUNNING = True
+    import sort_slips
+    import gen_pdf
+    import notify
 
     try:
-        import sort_slips
-        import gen_pdf
-        import notify
-
         if cmd == "/sort":
             send("🔄 เริ่ม sort slip...")
             result = sort_slips.run()
-            send(notify.build_sort_message(result) if hasattr(notify, 'build_sort_message') else
-                 f"✅ Sort เสร็จ\nใหม่: {result.get('new',0)}  ซ้ำ: {result.get('duplicate',0)}  จัดไม่ได้: {result.get('unclassified',0)}")
+            lines = [
+                "📥 <b>Sort เสร็จแล้ว</b>",
+                "─────────────────",
+                f"✅ ใหม่      : {result.get('new', 0)}",
+                f"⚠️  ซ้ำ       : {result.get('duplicate', 0)}",
+                f"❓ จัดไม่ได้ : {result.get('unclassified', 0)}",
+                f"❌ ล้มเหลว  : {result.get('failed', 0)}",
+            ]
+            send("\n".join(lines))
             if result.get("unclassified", 0) > 0:
                 send(notify.build_unclassified_message(result))
 
         elif cmd == "/gen":
             send("🔄 เริ่ม gen PDF...")
             result = gen_pdf.run()
-            send(notify.build_gen_message(result) if hasattr(notify, 'build_gen_message') else
-                 f"✅ Gen PDF เสร็จ\ngen ใหม่: {result.get('new',0)}  ล้มเหลว: {result.get('failed',0)}")
+            lines = [
+                "📄 <b>Gen PDF เสร็จแล้ว</b>",
+                "─────────────────",
+                f"✅ gen ใหม่  : {result.get('new', 0)}",
+                f"❌ ล้มเหลว  : {result.get('failed', 0)}",
+            ]
+            monthly = result.get("monthly", {})
+            if monthly:
+                lines.append("─────────────────")
+                lines.append("💰 ยอดรายจ่ายรอบนี้:")
+                for m in sorted(monthly.keys()):
+                    lines.append(f"  {m}: ฿{monthly[m]:,.0f}")
+            send("\n".join(lines))
 
         elif cmd == "/run":
             send("🔄 เริ่ม pipeline ทั้งหมด...")
 
             # sort
             sort_result = sort_slips.run()
-            msg = [
+            lines = [
                 "📥 <b>Sort เสร็จแล้ว</b>",
                 "─────────────────",
                 f"✅ ใหม่      : {sort_result.get('new', 0)}",
@@ -97,7 +108,7 @@ def run_command(cmd: str):
                 f"❓ จัดไม่ได้ : {sort_result.get('unclassified', 0)}",
                 f"❌ ล้มเหลว  : {sort_result.get('failed', 0)}",
             ]
-            send("\n".join(msg))
+            send("\n".join(lines))
             if sort_result.get("unclassified", 0) > 0:
                 send(notify.build_unclassified_message(sort_result))
 
@@ -107,7 +118,7 @@ def run_command(cmd: str):
 
             # gen
             gen_result = gen_pdf.run()
-            msg2 = [
+            lines2 = [
                 "📄 <b>Gen PDF เสร็จแล้ว</b>",
                 "─────────────────",
                 f"✅ gen ใหม่  : {gen_result.get('new', 0)}",
@@ -115,15 +126,15 @@ def run_command(cmd: str):
             ]
             monthly = gen_result.get("monthly", {})
             if monthly:
-                msg2.append("─────────────────")
-                msg2.append("💰 ยอดรายจ่ายรอบนี้:")
+                lines2.append("─────────────────")
+                lines2.append("💰 ยอดรายจ่ายรอบนี้:")
                 for m in sorted(monthly.keys()):
-                    msg2.append(f"  {m}: ฿{monthly[m]:,.0f}")
-            send("\n".join(msg2))
+                    lines2.append(f"  {m}: ฿{monthly[m]:,.0f}")
+            send("\n".join(lines2))
 
     except Exception as e:
-        send(f"❌ เกิดข้อผิดพลาด\n<code>{e}</code>")
         import traceback
+        send(f"❌ เกิดข้อผิดพลาด\n<code>{e}</code>")
         print(traceback.format_exc())
     finally:
         global RUNNING
@@ -131,13 +142,23 @@ def run_command(cmd: str):
             RUNNING = False
 
 
+def run_command(cmd: str):
+    global RUNNING
+    with LOCK:
+        if RUNNING:
+            send("⚠️ กำลังรันอยู่แล้ว รอให้เสร็จก่อนนะครับ")
+            return
+        RUNNING = True
+    t = threading.Thread(target=do_run, args=(cmd,), daemon=True)
+    t.start()
+
+
 def handle_command(text: str):
     cmd = text.strip().split()[0].lower()
     if cmd == "/status":
         send(check_mounts())
     elif cmd in ("/run", "/sort", "/gen"):
-        t = threading.Thread(target=run_command, args=(cmd,), daemon=True)
-        t.start()
+        run_command(cmd)
     elif cmd == "/help":
         send(
             "📋 <b>คำสั่งที่ใช้ได้</b>\n"
@@ -149,12 +170,12 @@ def handle_command(text: str):
             "/help   — แสดงคำสั่ง"
         )
     else:
-        send(f"❓ ไม่รู้จักคำสั่ง <code>{cmd}</code>\nพิมพ์ /help เพื่อดูคำสั่งทั้งหมด")
+        send(f"❓ ไม่รู้จักคำสั่ง <code>{cmd}</code>\nพิมพ์ /help เพื่อดูคำสั่ง")
 
 
 def main():
     global OFFSET
-    print(f"🤖 Telegram Bot เริ่มทำงาน — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"🤖 Bot เริ่มทำงาน — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     send("🤖 <b>Slip Processor Bot พร้อมแล้ว!</b>\nพิมพ์ /help เพื่อดูคำสั่ง")
 
     while True:
@@ -164,7 +185,6 @@ def main():
             msg = update.get("message") or update.get("channel_post")
             if not msg:
                 continue
-            # เช็คว่าเป็น chat ที่อนุญาต
             chat_id = str(msg.get("chat", {}).get("id", ""))
             if chat_id != str(TELEGRAM_CHAT_ID):
                 continue
