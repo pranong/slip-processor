@@ -1,29 +1,30 @@
 """
 config.py — ตั้งค่าทั้งหมดที่นี่ที่เดียว
-แก้ค่าข้างล่างให้ตรงกับระบบของคุณ
 """
 
 # ── Google Drive (rclone remote name) ─────────────────────────────────────────
-RCLONE_REMOTE     = "gdrive"                           # ชื่อ remote ที่ตั้งใน rclone config
-DRIVE_RAW_FOLDER  = "gdrive:SlipProcessor/rawFile"     # folder รับรูปจากมือถือ
-DRIVE_DATA_FOLDER = "gdrive:SlipProcessor/data"        # folder ผลลัพธ์ทั้งหมด
+RCLONE_REMOTE     = "gdrive"
+DRIVE_RAW_FOLDER  = "gdrive:SlipProcessor/rawFile"
+DRIVE_DATA_FOLDER = "gdrive:SlipProcessor/data"
 
-# ── Path บน Pi (mount points) ─────────────────────────────────────────────────
-BASE_DIR       = "/home/pi/slip-processor"
-RAW_MOUNT      = f"{BASE_DIR}/rawFile"                 # mount Drive:rawFile มาที่นี่
-DATA_MOUNT     = f"{BASE_DIR}/data"                    # mount Drive:data มาที่นี่ (read/write)
-TEMPLATE_DIR   = f"{BASE_DIR}/template"
+# ── Path ──────────────────────────────────────────────────────────────────────
+CODE_DIR       = "/app/uan/slip-processor"             # code อยู่ที่นี่
+MOUNT_DIR      = "/home/pi/slip-processor"             # mount point อยู่ที่นี่
+RAW_MOUNT      = f"{MOUNT_DIR}/rawFile"
+DATA_MOUNT     = f"{MOUNT_DIR}/data"
+TEMPLATE_DIR   = f"{CODE_DIR}/template"
 TEMPLATE_PATH  = f"{TEMPLATE_DIR}/ใบรับรองแทนใบเสร็จรับเงิน.docx"
-HASH_DB_PATH   = f"{BASE_DIR}/processed_hashes.json"
-LOG_DIR        = f"{BASE_DIR}/logs"
+HASH_DB_PATH   = f"{CODE_DIR}/processed_hashes.json"
+LOG_DIR        = f"{CODE_DIR}/logs"
 
 # ── Claude API ────────────────────────────────────────────────────────────────
-CLAUDE_MODEL   = "claude-sonnet-4-6"
-HASH_THRESHOLD = 8                                     # phash ≤ 8 ถือว่าซ้ำ
+ANTHROPIC_API_KEY = "YOUR_ANTHROPIC_API_KEY"         # ← จาก console.anthropic.com
+CLAUDE_MODEL      = "claude-sonnet-4-6"
+HASH_THRESHOLD    = 8
 
 # ── Telegram Bot ──────────────────────────────────────────────────────────────
-TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN"    # ← จาก @BotFather
-TELEGRAM_CHAT_ID   = "YOUR_CHAT_ID"     # ← จาก getUpdates API
+TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN"
+TELEGRAM_CHAT_ID   = "YOUR_CHAT_ID"
 
 # ── อื่นๆ ─────────────────────────────────────────────────────────────────────
 IMAGE_EXTS     = {".jpg", ".jpeg", ".png", ".webp", ".gif"}

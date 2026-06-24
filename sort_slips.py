@@ -15,7 +15,7 @@ from PIL import Image
 
 from config import (
     RAW_MOUNT, DATA_MOUNT, HASH_DB_PATH,
-    CLAUDE_MODEL, HASH_THRESHOLD, MONTH_MAP, IMAGE_EXTS
+    ANTHROPIC_API_KEY, CLAUDE_MODEL, HASH_THRESHOLD, MONTH_MAP, IMAGE_EXTS
 )
 
 # ── Claude Prompt (ดึงทุกอย่างในรอบเดียว) ────────────────────────────────────
@@ -141,7 +141,7 @@ def run() -> dict:
 
     print(f"📂 พบรูปใหม่ {len(images)} ไฟล์")
 
-    client  = anthropic.Anthropic()
+    client  = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     hash_db = load_hash_db()
     results = {"new": 0, "duplicate": 0, "failed": 0, "unclassified": 0, "details": []}
 
