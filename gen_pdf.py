@@ -281,23 +281,31 @@ def run() -> dict:
                 if not images_dir.exists():
                     continue
 
-                # หา slip_data JSON ที่ยังไม่ได้ gen PDF
+                # หา slip JSON ทั้งหมดของวันนี้
+                all_slips = []
                 new_slips = []
                 for jf in sorted(images_dir.glob("*.json")):
                     data = json.loads(jf.read_text(encoding="utf-8"))
+                    data["_json_path"] = str(jf)
+                    all_slips.append(data)
                     if not data.get("pdf_generated", False):
-                        data["_json_path"] = str(jf)
                         new_slips.append(data)
 
+                # ถ้าไม่มี slip ใหม่เลย ข้ามไป
                 if not new_slips:
                     continue
 
                 print(f"  📄 {year_dir.name}/{month_dir.name}/{day_dir.name} "
-                      f"— {len(new_slips)} slip ใหม่", end=" ... ")
+                      f"— slip ใหม่ {len(new_slips)} ใบ (รวมทั้งหมด {len(all_slips)} ใบ)", end=" ... ")
 
-                # gen PDF
+                # ลบ PDF เก่าของวันนี้ก่อน แล้ว re-gen ใหม่รวมทั้งหมด
+                docs_dir.mkdir(parents=True, exist_ok=True)
+                for old_pdf in docs_dir.glob("*.pdf"):
+                    old_pdf.unlink()
+
+                # gen PDF ใหม่จาก slip ทั้งหมดของวันนี้
                 docx_path = fill_template(
-                    new_slips,
+                    all_slips,
                     day_dir.name,
                     month_dir.name,
                     year_dir.name
@@ -307,12 +315,9 @@ def run() -> dict:
                     results["failed"] += len(new_slips)
                     continue
 
-                # หา running number สำหรับ PDF
+                # PDF ชื่อคงที่ (ไม่ใช้ running number แล้ว เพราะ re-gen ทับเสมอ)
                 docs_dir.mkdir(parents=True, exist_ok=True)
-                existing = list(docs_dir.glob("ใบรับรองแทนใบเสร็จรับเงิน_*.pdf"))
-                next_num = len(existing) + 1
-                # rename docx ก่อน convert
-                final_name = f"ใบรับรองแทนใบเสร็จรับเงิน_{next_num:03d}"
+                final_name   = f"ใบรับรองแทนใบเสร็จรับเงิน"
                 renamed_docx = docx_path.parent / f"{final_name}.docx"
                 docx_path.rename(renamed_docx)
 
@@ -324,15 +329,15 @@ def run() -> dict:
                     results["failed"] += len(new_slips)
                     continue
 
-                # mark as generated
-                for s in new_slips:
+                # mark ทุก slip ของวันนี้ว่า generated แล้ว
+                for s in all_slips:
                     jf = Path(s["_json_path"])
                     d = json.loads(jf.read_text(encoding="utf-8"))
                     d["pdf_generated"] = True
                     d["pdf_file"] = str(pdf_path)
                     jf.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
 
-                # merge summary
+                # merge summary (เฉพาะ slip ใหม่)
                 merge_to_summary(summary, month_dir.name, day_dir.name,
                                  new_slips, pdf_path.name)
 
