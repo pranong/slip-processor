@@ -16,8 +16,40 @@ from pathlib import Path
 from docx import Document as DocxDocument
 from docx.oxml.ns import qn
 
-from config import DATA_MOUNT, TEMPLATE_PATH, MONTH_MAP
+from config import DATA_MOUNT, TEMPLATE_DIR, TEMPLATE_PATH, MONTH_MAP
 from thai_baht_text import baht_text
+
+# ── Routing config ────────────────────────────────────────────────────────────
+# เพิ่ม keyword ใหม่ได้ที่นี่
+NOTE_ROUTES = [
+    {
+        "prefix": "uan",
+        "subfolder": "uan",
+        "template": "ใบรับรองแทนใบเสร็จรับเงินบริษัท.docx",
+    },
+    {
+        "prefix": "ceramic",
+        "subfolder": "ceramic",
+        "template": "ใบรับรองแทนใบเสร็จรับเงินบริษัท.docx",
+    },
+]
+DEFAULT_SUBFOLDER = "บุคคล"
+DEFAULT_TEMPLATE  = "ใบรับรองแทนใบเสร็จรับเงิน.docx"
+
+
+def get_route(note: str) -> dict:
+    """หา subfolder และ template จาก note"""
+    note_lower = (note or "").lower().strip()
+    for route in NOTE_ROUTES:
+        if note_lower.startswith(route["prefix"].lower()):
+            return {
+                "subfolder": route["subfolder"],
+                "template":  Path(TEMPLATE_DIR) / route["template"],
+            }
+    return {
+        "subfolder": DEFAULT_SUBFOLDER,
+        "template":  Path(TEMPLATE_DIR) / DEFAULT_TEMPLATE,
+    }
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 
@@ -39,7 +71,7 @@ def save_summary(year_dir: Path, summary: dict):
         bak_dir = year_dir / "backups"
         bak_dir.mkdir(exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        shutil.copy2(p, bak_dir / f"summary_{ts}.json")
+        shutil.copy(p, bak_dir / f"summary_{ts}.json")
 
     p.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -163,9 +195,9 @@ def _replace_text_in_doc(doc: DocxDocument, placeholder: str, value: str):
 
 
 def fill_template(slips: list[dict], day_str: str, month_name: str,
-                  year_thai: str) -> Path | None:
+                  year_thai: str, template_path: Path | None = None) -> Path | None:
     """เติมข้อมูลลง template, return path ของ docx ที่ fill แล้ว"""
-    template = Path(TEMPLATE_PATH)
+    template = template_path if template_path else Path(TEMPLATE_PATH)
     if not template.exists():
         print(f"    ⚠️  ไม่พบ template: {template}")
         return None
@@ -211,7 +243,7 @@ def fill_template(slips: list[dict], day_str: str, month_name: str,
         # แปลงเป็น พ.ศ.
         year_be  = year_val + 543 if isinstance(year_val, int) else ""
         date_str = f"{day_val}/{mon_val}/{year_be}" if day_val else ""
-        desc_str = slip.get("description") or "-"
+        desc_str = slip.get("note") or slip.get("description") or "-"
         amt      = slip.get("amount") or 0
         amt_str  = f"{amt:,.2f}"
         total   += amt
@@ -295,59 +327,86 @@ def run() -> dict:
                 if not new_slips:
                     continue
 
-                print(f"  📄 {year_dir.name}/{month_dir.name}/{day_dir.name} "
-                      f"— slip ใหม่ {len(new_slips)} ใบ (รวมทั้งหมด {len(all_slips)} ใบ)", end=" ... ")
-
-                # ลบ PDF เก่าของวันนี้ก่อน แล้ว re-gen ใหม่รวมทั้งหมด
-                docs_dir.mkdir(parents=True, exist_ok=True)
-                for old_pdf in docs_dir.glob("*.pdf"):
-                    old_pdf.unlink()
-
-                # gen PDF ใหม่จาก slip ทั้งหมดของวันนี้
-                docx_path = fill_template(
-                    all_slips,
-                    day_dir.name,
-                    month_dir.name,
-                    year_dir.name
-                )
-
-                if docx_path is None:
-                    results["failed"] += len(new_slips)
-                    continue
-
-                # PDF ชื่อคงที่ (ไม่ใช้ running number แล้ว เพราะ re-gen ทับเสมอ)
-                docs_dir.mkdir(parents=True, exist_ok=True)
-                final_name   = f"ใบรับรองแทนใบเสร็จรับเงิน"
-                renamed_docx = docx_path.parent / f"{final_name}.docx"
-                docx_path.rename(renamed_docx)
-
-                pdf_path = convert_to_pdf(renamed_docx, docs_dir)
-                renamed_docx.unlink(missing_ok=True)
-
-                if pdf_path is None:
-                    print("❌ convert PDF ล้มเหลว")
-                    results["failed"] += len(new_slips)
-                    continue
-
-                # mark ทุก slip ของวันนี้ว่า generated แล้ว
+                # ── แบ่ง slip ตาม route (note prefix) ──
+                # group: { subfolder: {"slips": [...], "template": Path} }
+                groups: dict[str, dict] = {}
                 for s in all_slips:
-                    jf = Path(s["_json_path"])
-                    d = json.loads(jf.read_text(encoding="utf-8"))
-                    d["pdf_generated"] = True
-                    d["pdf_file"] = str(pdf_path)
-                    jf.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+                    note  = s.get("note") or ""
+                    route = get_route(note)
+                    sf    = route["subfolder"]
+                    if sf not in groups:
+                        groups[sf] = {"slips": [], "template": route["template"]}
+                    groups[sf]["slips"].append(s)
 
-                # merge summary (เฉพาะ slip ใหม่)
-                merge_to_summary(summary, month_dir.name, day_dir.name,
-                                 new_slips, pdf_path.name)
+                # เช็คว่า group ไหนมี slip ใหม่
+                new_slip_paths = {s["_json_path"] for s in new_slips}
+                has_new = {sf for sf, g in groups.items()
+                           if any(s["_json_path"] in new_slip_paths for s in g["slips"])}
 
-                total_amt = sum(s.get("amount") or 0 for s in new_slips)
-                results["monthly"][month_dir.name] = (
-                    results["monthly"].get(month_dir.name, 0) + total_amt
-                )
+                if not has_new:
+                    continue
 
-                print(f"✅ {pdf_path.name} (฿{total_amt:,.0f})")
-                results["new"] += 1
+                print(f"  📄 {year_dir.name}/{month_dir.name}/{day_dir.name} "
+                      f"— slip ใหม่ {len(new_slips)} ใบ ({', '.join(has_new)})")
+
+                for sf, group in groups.items():
+                    # ข้าม group ที่ไม่มี slip ใหม่
+                    if sf not in has_new:
+                        continue
+
+                    group_slips = group["slips"]
+                    tmpl_path   = group["template"]
+                    sub_docs    = day_dir / "docs" / sf
+
+                    # ลบ PDF เก่าของ subfolder นี้
+                    sub_docs.mkdir(parents=True, exist_ok=True)
+                    for old_pdf in sub_docs.glob("*.pdf"):
+                        old_pdf.unlink()
+
+                    # gen PDF
+                    docx_path = fill_template(
+                        group_slips,
+                        day_dir.name,
+                        month_dir.name,
+                        year_dir.name,
+                        template_path=tmpl_path,
+                    )
+
+                    if docx_path is None:
+                        results["failed"] += 1
+                        continue
+
+                    final_name   = "ใบรับรองแทนใบเสร็จรับเงิน"
+                    renamed_docx = docx_path.parent / f"{final_name}.docx"
+                    docx_path.rename(renamed_docx)
+
+                    pdf_path = convert_to_pdf(renamed_docx, sub_docs)
+                    renamed_docx.unlink(missing_ok=True)
+
+                    if pdf_path is None:
+                        print(f"    ❌ [{sf}] convert PDF ล้มเหลว")
+                        results["failed"] += 1
+                        continue
+
+                    # mark slip ใน group นี้ว่า generated
+                    for s in group_slips:
+                        jf = Path(s["_json_path"])
+                        d  = json.loads(jf.read_text(encoding="utf-8"))
+                        d["pdf_generated"] = True
+                        d["pdf_file"]      = str(pdf_path)
+                        jf.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+
+                    # merge summary เฉพาะ slip ใหม่ใน group นี้
+                    group_new = [s for s in group_slips if s["_json_path"] in new_slip_paths]
+                    merge_to_summary(summary, month_dir.name, day_dir.name,
+                                     group_new, pdf_path.name)
+
+                    total_amt = sum(s.get("amount") or 0 for s in group_new)
+                    results["monthly"][month_dir.name] = (
+                        results["monthly"].get(month_dir.name, 0) + total_amt
+                    )
+                    print(f"    ✅ [{sf}] {pdf_path.name} (฿{total_amt:,.0f})")
+                    results["new"] += 1
 
         save_summary(year_dir, summary)
 

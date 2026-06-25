@@ -31,15 +31,17 @@ SYSTEM_PROMPT = """คุณคือระบบดึงข้อมูลจ�
   "month": <1-12>,
   "year_ce": <ปี ค.ศ.>,
   "amount": <จำนวนเงิน ตัวเลขเท่านั้น>,
-  "description": "<รายละเอียดสั้นๆ เช่น โอนเงิน/จ่ายค่าสินค้า/ค่าอาหาร>",
+  "note": "<ข้อความใน Note / บันทึกช่วยจำ / หมายเหตุ ของ slip ถ้าไม่มีให้ใส่ null>",
   "from_account": "<ชื่อผู้โอน หรือ เลขบัญชี>",
   "to_account": "<ชื่อผู้รับ หรือ เลขบัญชี>",
   "bank": "<ธนาคาร>",
   "ref": "<เลข reference/transaction ID>"
 }
-ถ้าไม่พบข้อมูลใดให้ใส่ null
-ถ้าปีเป็น พ.ศ. ให้แปลงเป็น ค.ศ. (พ.ศ. - 543 = ค.ศ.)
-ถ้าหาวันที่ไม่ได้เลยให้ตอบ: {"error": "date not found"}"""
+หมายเหตุ:
+- field "note" คือข้อความที่อยู่ในช่อง Note / บันทึกช่วยจำ / หมายเหตุ / บันทึก ของ slip เท่านั้น
+- ถ้าไม่พบข้อมูลใดให้ใส่ null
+- ถ้าปีเป็น พ.ศ. ให้แปลงเป็น ค.ศ. (พ.ศ. - 543 = ค.ศ.)
+- ถ้าหาวันที่ไม่ได้เลยให้ตอบ: {"error": "date not found"}"""
 
 # ── Hash DB ───────────────────────────────────────────────────────────────────
 
@@ -123,7 +125,7 @@ def safe_copy(src: Path, dest_dir: Path) -> Path:
     while dest.exists():
         dest = dest_dir / f"{src.stem}_{counter}{src.suffix}"
         counter += 1
-    shutil.copy2(src, dest)
+    shutil.copy(src, dest)
     return dest
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -174,6 +176,17 @@ def run() -> dict:
                 with lock:
                     results["unclassified"] += 1
                     results["details"].append({"file": img.name, "status": "unclassified"})
+                return
+
+            # ── เช็ค note — ถ้าไม่มีให้ไป unclassified ──
+            note = info.get("note")
+            if not note:
+                unclass_dir = data / "unclassified"
+                dest = safe_copy(img, unclass_dir)
+                print(f"❓ ไม่มี note → {dest}")
+                with lock:
+                    results["unclassified"] += 1
+                    results["details"].append({"file": img.name, "status": "unclassified", "reason": "no note"})
                 return
 
             # ── แยก folder ──
