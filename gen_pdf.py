@@ -307,16 +307,17 @@ def run() -> dict:
                 if not day_dir.is_dir():
                     continue
 
-                images_dir = day_dir / "images"
-                docs_dir   = day_dir / "docs"
+                images_dir   = day_dir / "images"
+                metadata_dir = day_dir / "metadata"
 
                 if not images_dir.exists():
                     continue
 
-                # หา slip JSON ทั้งหมดของวันนี้
+                # หา slip JSON ทั้งหมดจาก metadata/
                 all_slips = []
                 new_slips = []
-                for jf in sorted(images_dir.glob("*.json")):
+                json_dir  = metadata_dir if metadata_dir.exists() else images_dir
+                for jf in sorted(json_dir.glob("*.json")):
                     data = json.loads(jf.read_text(encoding="utf-8"))
                     data["_json_path"] = str(jf)
                     all_slips.append(data)

@@ -197,11 +197,13 @@ def run() -> dict:
             day_str    = f"{day:02d}"
             year_str   = str(year)
 
-            dest_dir = data / year_str / month_name / day_str / "images"
+            dest_dir     = data / year_str / month_name / day_str / "images"
+            metadata_dir = data / year_str / month_name / day_str / "metadata"
             dest_img = safe_copy(img, dest_dir)
 
-            # ── บันทึก slip_data JSON ──
-            slip_json = dest_img.with_suffix(".json")
+            # ── บันทึก slip_data JSON ใน metadata/ ──
+            metadata_dir.mkdir(parents=True, exist_ok=True)
+            slip_json = metadata_dir / (dest_img.stem + ".json")
             info["source_file"]   = img.name
             info["dest_file"]     = dest_img.name
             info["pdf_generated"] = False
