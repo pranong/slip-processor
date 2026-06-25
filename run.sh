@@ -11,26 +11,24 @@ echo "========================================"
 echo "▶ $(date '+%Y-%m-%d %H:%M:%S')"
 echo "========================================"
 
-# เช็ค mount ก่อน
+# restart mount ทุกครั้งก่อนรัน ให้สะอาดเสมอ
+echo "── restart mount ──"
+sudo systemctl restart rclone-rawfile.service
+sudo systemctl restart rclone-data.service
+sleep 10
+
+# เช็คว่า mount พร้อมไหม
 if ! mountpoint -q "$MOUNT/rawFile"; then
-    echo "❌ rawFile ยัง mount ไม่ได้ — ลอง restart"
-    sudo systemctl restart rclone-rawfile.service
-    sleep 10
-    if ! mountpoint -q "$MOUNT/rawFile"; then
-        echo "❌ mount ไม่สำเร็จ — ยกเลิก"
-        exit 1
-    fi
+    echo "❌ rawFile mount ไม่สำเร็จ — ยกเลิก"
+    exit 1
 fi
 
 if ! mountpoint -q "$MOUNT/data"; then
-    echo "❌ data ยัง mount ไม่ได้ — ลอง restart"
-    sudo systemctl restart rclone-data.service
-    sleep 10
-    if ! mountpoint -q "$MOUNT/data"; then
-        echo "❌ mount ไม่สำเร็จ — ยกเลิก"
-        exit 1
-    fi
+    echo "❌ data mount ไม่สำเร็จ — ยกเลิก"
+    exit 1
 fi
+
+echo "✅ mount พร้อม"
 
 # รัน pipeline
 cd "$CODE"
