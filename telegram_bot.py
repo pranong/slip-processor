@@ -142,32 +142,107 @@ def do_run(cmd: str):
             RUNNING = False
 
 
-def run_command(cmd: str):
+def reset_pdf_generated(path_filter: str) -> int:
+    """Reset pdf_generated=false ใน metadata JSON ตาม path filter"""
+    import json
+    from pathlib import Path
+    from config import DATA_MOUNT
+
+    data_root = Path(DATA_MOUNT)
+    count = 0
+    for jf in data_root.rglob("*.json"):
+        # กรอง path ตาม filter เช่น "2026", "2026/JUN", "2026/JUN/24"
+        if path_filter not in str(jf) or "metadata" not in str(jf):
+            continue
+        try:
+            d = json.loads(jf.read_text(encoding="utf-8"))
+            if d.get("pdf_generated"):
+                d["pdf_generated"] = False
+                jf.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+                count += 1
+        except Exception:
+            pass
+    return count
+
+
+def do_regen(scope: str):
+    """regen ตาม scope เช่น 2026 / 2026/JUN / 2026/JUN/24"""
+    global RUNNING
+    try:
+        import gen_pdf
+        send(f"🔄 Reset และ regen: <code>{scope}</code>...")
+        count = reset_pdf_generated(scope)
+        send(f"♻️ Reset {count} รายการ — กำลัง gen...")
+        result = gen_pdf.run()
+        lines = [
+            f"📄 <b>Regen เสร็จแล้ว ({scope})</b>",
+            "─────────────────",
+            f"✅ gen ใหม่  : {result.get('new', 0)}",
+            f"❌ ล้มเหลว  : {result.get('failed', 0)}",
+        ]
+        monthly = result.get("monthly", {})
+        if monthly:
+            lines.append("─────────────────")
+            lines.append("💰 ยอดรวม:")
+            for m in sorted(monthly.keys()):
+                lines.append(f"  {m}: ฿{monthly[m]:,.0f}")
+        send("\n".join(lines))
+    except Exception as e:
+        import traceback
+        send(f"❌ เกิดข้อผิดพลาด\n<code>{e}</code>")
+        print(traceback.format_exc())
+    finally:
+        global RUNNING
+        with LOCK:
+            RUNNING = False
+
+
+def run_command(cmd: str, extra: str = ""):
     global RUNNING
     with LOCK:
         if RUNNING:
             send("⚠️ กำลังรันอยู่แล้ว รอให้เสร็จก่อนนะครับ")
             return
         RUNNING = True
-    t = threading.Thread(target=do_run, args=(cmd,), daemon=True)
+
+    if cmd in ("/genyear", "/genmonth", "/genday"):
+        t = threading.Thread(target=do_regen, args=(extra,), daemon=True)
+    else:
+        t = threading.Thread(target=do_run, args=(cmd,), daemon=True)
     t.start()
 
 
 def handle_command(text: str):
-    cmd = text.strip().split()[0].lower()
+    parts = text.strip().split()
+    cmd   = parts[0].lower()
+    extra = parts[1].lstrip("-") if len(parts) > 1 else ""
+
     if cmd == "/status":
         send(check_mounts())
     elif cmd in ("/run", "/sort", "/gen"):
         run_command(cmd)
+    elif cmd in ("/genyear", "/genmonth", "/genday"):
+        if not extra:
+            examples = {
+                "/genyear": "/genYear -2026",
+                "/genmonth": "/genMonth -2026/JUN",
+                "/genday": "/genDay -2026/JUN/24",
+            }
+            send(f"❗ ระบุ scope ด้วยครับ เช่น\n<code>{examples[cmd]}</code>")
+            return
+        run_command(cmd, extra)
     elif cmd == "/help":
         send(
             "📋 <b>คำสั่งที่ใช้ได้</b>\n"
             "─────────────────\n"
-            "/run    — รัน pipeline ทั้งหมด\n"
-            "/sort   — อ่าน slip + แยก folder\n"
-            "/gen    — gen PDF เท่านั้น\n"
-            "/status — เช็คสถานะ mount\n"
-            "/help   — แสดงคำสั่ง"
+            "/run              — รัน pipeline ทั้งหมด\n"
+            "/sort             — อ่าน slip + แยก folder\n"
+            "/gen              — gen PDF เท่านั้น\n"
+            "/genYear -2026    — regen ทั้งปี\n"
+            "/genMonth -2026/JUN — regen ทั้งเดือน\n"
+            "/genDay -2026/JUN/24 — regen วันเดียว\n"
+            "/status           — เช็คสถานะ mount\n"
+            "/help             — แสดงคำสั่ง"
         )
     else:
         send(f"❓ ไม่รู้จักคำสั่ง <code>{cmd}</code>\nพิมพ์ /help เพื่อดูคำสั่ง")

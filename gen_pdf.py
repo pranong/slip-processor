@@ -417,4 +417,39 @@ def run() -> dict:
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Gen PDF ใบรับรองแทนใบเสร็จรับเงิน")
+    parser.add_argument(
+        "--regen",
+        nargs=2,
+        metavar=("SCOPE", "VALUE"),
+        help="regen โดย bypass ตัวเช็ค เช่น --regen year 2026 | --regen month 2026/JUN | --regen day 2026/JUN/24"
+    )
+    args = parser.parse_args()
+
+    if args.regen:
+        scope_type, scope_value = args.regen
+        # normalize: เปลี่ยน / เป็น path separator ที่ถูกต้อง
+        path_filter = scope_value.replace("/", "/")
+
+        print(f"♻️  Regen mode: {scope_type} = {scope_value}")
+        print(f"   Reset pdf_generated ใน path ที่มี '{path_filter}'...")
+
+        from pathlib import Path
+        data_root = Path(DATA_MOUNT)
+        count = 0
+        for jf in data_root.rglob("*.json"):
+            if path_filter not in str(jf) or "metadata" not in str(jf):
+                continue
+            try:
+                d = json.loads(jf.read_text(encoding="utf-8"))
+                if d.get("pdf_generated"):
+                    d["pdf_generated"] = False
+                    jf.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+                    count += 1
+            except Exception:
+                pass
+        print(f"   Reset {count} รายการ\n")
+
     run()
