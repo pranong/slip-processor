@@ -383,7 +383,7 @@ def run() -> dict:
                     shutil.move(str(docx_path), str(renamed_docx))
 
                     pdf_path = convert_to_pdf(renamed_docx, sub_docs)
-                    # เก็บ docx ไว้ด้วย ไม่ลบ
+                    renamed_docx.unlink(missing_ok=True)
 
                     if pdf_path is None:
                         print(f"    ❌ [{sf}] convert PDF ล้มเหลว")
