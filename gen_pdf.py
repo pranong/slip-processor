@@ -378,11 +378,12 @@ def run() -> dict:
                         continue
 
                     final_name   = "ใบรับรองแทนใบเสร็จรับเงิน"
-                    renamed_docx = docx_path.parent / f"{final_name}.docx"
-                    docx_path.rename(renamed_docx)
+                    final_name   = "ใบรับรองแทนใบเสร็จรับเงิน"
+                    renamed_docx = sub_docs / f"{final_name}.docx"
+                    shutil.move(str(docx_path), str(renamed_docx))
 
                     pdf_path = convert_to_pdf(renamed_docx, sub_docs)
-                    renamed_docx.unlink(missing_ok=True)
+                    # เก็บ docx ไว้ด้วย ไม่ลบ
 
                     if pdf_path is None:
                         print(f"    ❌ [{sf}] convert PDF ล้มเหลว")
