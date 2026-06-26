@@ -143,25 +143,11 @@ def do_run(cmd: str):
 
 
 def reset_pdf_generated(path_filter: str) -> int:
-    """Reset pdf_generated=false ใน metadata JSON ตาม path filter"""
-    import json
-    from pathlib import Path
-    from config import DATA_MOUNT
-
-    data_root = Path(DATA_MOUNT)
-    count = 0
-    for jf in data_root.rglob("*.json"):
-        # กรอง path ตาม filter เช่น "2026", "2026/JUN", "2026/JUN/24"
-        if path_filter not in str(jf) or "metadata" not in str(jf):
-            continue
-        try:
-            d = json.loads(jf.read_text(encoding="utf-8"))
-            if d.get("pdf_generated"):
-                d["pdf_generated"] = False
-                jf.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
-                count += 1
-        except Exception:
-            pass
+    """Reset state local ตาม path filter — เร็วมาก ไม่แตะ Drive เลย"""
+    from state import load_state, save_state, reset_state
+    state = load_state()
+    count = reset_state(state, path_filter)
+    save_state(state)
     return count
 
 

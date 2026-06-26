@@ -18,6 +18,7 @@ from docx.oxml.ns import qn
 
 from config import DATA_MOUNT, TEMPLATE_DIR, TEMPLATE_PATH, MONTH_MAP
 from thai_baht_text import baht_text
+from state import load_state, save_state, mark_generated, is_generated
 
 # ── Routing config ────────────────────────────────────────────────────────────
 # เพิ่ม keyword ใหม่ได้ที่นี่
@@ -302,6 +303,7 @@ def convert_to_pdf(docx_path: Path, output_dir: Path) -> Path | None:
 def run() -> dict:
     data_root = Path(DATA_MOUNT)
     results   = {"new": 0, "skip": 0, "failed": 0, "monthly": {}}
+    state     = load_state()
 
     # วน loop ปี/เดือน/วัน
     for year_dir in sorted(data_root.iterdir()):
@@ -326,21 +328,16 @@ def run() -> dict:
 
                 # หา slip JSON ทั้งหมดจาก metadata/
                 all_slips = []
-                new_slips = []
                 json_dir  = metadata_dir if metadata_dir.exists() else images_dir
                 for jf in sorted(json_dir.glob("*.json")):
                     data = json.loads(jf.read_text(encoding="utf-8"))
                     data["_json_path"] = str(jf)
                     all_slips.append(data)
-                    if not data.get("pdf_generated", False):
-                        new_slips.append(data)
 
-                # ถ้าไม่มี slip ใหม่เลย ข้ามไป
-                if not new_slips:
+                if not all_slips:
                     continue
 
                 # ── แบ่ง slip ตาม route (note prefix) ──
-                # group: { subfolder: {"slips": [...], "template": Path} }
                 groups: dict[str, dict] = {}
                 for s in all_slips:
                     note  = s.get("note") or ""
@@ -350,30 +347,33 @@ def run() -> dict:
                         groups[sf] = {"slips": [], "template": route["template"]}
                     groups[sf]["slips"].append(s)
 
-                # เช็คว่า group ไหนมี slip ใหม่
-                new_slip_paths = {s["_json_path"] for s in new_slips}
-                has_new = {sf for sf, g in groups.items()
-                           if any(s["_json_path"] in new_slip_paths for s in g["slips"])}
-
-                if not has_new:
-                    continue
-
-                print(f"  📄 {year_dir.name}/{month_dir.name}/{day_dir.name} "
-                      f"— slip ใหม่ {len(new_slips)} ใบ ({', '.join(has_new)})")
-
                 for sf, group in groups.items():
-                    # ข้าม group ที่ไม่มี slip ใหม่
-                    if sf not in has_new:
-                        continue
-
                     group_slips = group["slips"]
                     tmpl_path   = group["template"]
                     sub_docs    = day_dir / "docs" / sf
 
-                    # ลบ PDF เก่าของ subfolder นี้
+                    # เช็ค state local ว่า group นี้มี slip ใหม่ไหม
+                    new_slips = [
+                        s for s in group_slips
+                        if not is_generated(state, year_dir.name, month_dir.name,
+                                            day_dir.name, sf, s)
+                    ]
+
+                    if not new_slips:
+                        continue
+
+                    print(f"  📄 {year_dir.name}/{month_dir.name}/{day_dir.name}/{sf} "
+                          f"— slip ใหม่ {len(new_slips)} ใบ (รวม {len(group_slips)} ใบ)")
+
+                    # ลบ PDF เก่าผ่าน rclone (เร็วกว่า unlink บน mount)
                     sub_docs.mkdir(parents=True, exist_ok=True)
-                    for old_pdf in sub_docs.glob("*.pdf"):
-                        old_pdf.unlink()
+                    import subprocess as _sp
+                    _sp.run([
+                        "rclone", "delete",
+                        f"gdrive:SlipProcessor/data/{year_dir.name}/{month_dir.name}/{day_dir.name}/docs/{sf}",
+                        "--include", "*.pdf",
+                        "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+                    ], capture_output=True)
 
                     # gen PDF
                     docx_path = fill_template(
@@ -389,7 +389,6 @@ def run() -> dict:
                         continue
 
                     final_name   = "ใบรับรองแทนใบเสร็จรับเงิน"
-                    final_name   = "ใบรับรองแทนใบเสร็จรับเงิน"
                     renamed_docx = sub_docs / f"{final_name}.docx"
                     shutil.move(str(docx_path), str(renamed_docx))
 
@@ -401,15 +400,13 @@ def run() -> dict:
                         results["failed"] += 1
                         continue
 
-                    # mark slip ใน group นี้ว่า generated
-                    for s in group_slips:
-                        jf = Path(s["_json_path"])
-                        d  = json.loads(jf.read_text(encoding="utf-8"))
-                        d["pdf_generated"] = True
-                        d["pdf_file"]      = str(pdf_path)
-                        jf.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+                    # บันทึก state local (เร็ว ไม่ต้องแตะ Drive)
+                    mark_generated(state, year_dir.name, month_dir.name,
+                                   day_dir.name, sf, group_slips, str(pdf_path))
+                    save_state(state)
 
-                    # merge summary เฉพาะ slip ใหม่ใน group นี้
+                    # merge summary
+                    new_slip_paths = {s["_json_path"] for s in new_slips}
                     group_new = [s for s in group_slips if s["_json_path"] in new_slip_paths]
                     merge_to_summary(summary, month_dir.name, day_dir.name,
                                      group_new, pdf_path.name)
@@ -441,26 +438,12 @@ if __name__ == "__main__":
 
     if args.regen:
         scope_type, scope_value = args.regen
-        # normalize: เปลี่ยน / เป็น path separator ที่ถูกต้อง
-        path_filter = scope_value.replace("/", "/")
-
         print(f"♻️  Regen mode: {scope_type} = {scope_value}")
-        print(f"   Reset pdf_generated ใน path ที่มี '{path_filter}'...")
 
-        from pathlib import Path
-        data_root = Path(DATA_MOUNT)
-        count = 0
-        for jf in data_root.rglob("*.json"):
-            if path_filter not in str(jf) or "metadata" not in str(jf):
-                continue
-            try:
-                d = json.loads(jf.read_text(encoding="utf-8"))
-                if d.get("pdf_generated"):
-                    d["pdf_generated"] = False
-                    jf.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
-                    count += 1
-            except Exception:
-                pass
-        print(f"   Reset {count} รายการ\n")
+        from state import load_state, save_state, reset_state
+        state = load_state()
+        count = reset_state(state, scope_value)
+        save_state(state)
+        print(f"   Reset {count} groups — กำลัง gen...\n")
 
     run()

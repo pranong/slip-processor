@@ -31,14 +31,19 @@ def setup_logging():
 
 
 def clear_raw_files():
-    raw = Path(RAW_MOUNT)
-    count = 0
-    for f in raw.iterdir():
-        if f.suffix.lower() in IMAGE_EXTS:
-            f.unlink()
-            count += 1
-    print(f"🗑️  ลบรูปใน rawFile: {count} ไฟล์")
-    return count
+    import subprocess
+    from config import RCLONE_REMOTE
+    result = subprocess.run([
+        "rclone", "delete", f"{RCLONE_REMOTE}:SlipProcessor/rawFile",
+        "--include", "*.jpg", "--include", "*.jpeg",
+        "--include", "*.png", "--include", "*.webp",
+        "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+    ], capture_output=True, text=True)
+    if result.returncode == 0:
+        print("🗑️  ลบรูปใน rawFile เสร็จแล้ว")
+    else:
+        print(f"⚠️  ลบ rawFile error: {result.stderr[:100]}")
+    return 0
 
 
 def check_mounts() -> bool:
