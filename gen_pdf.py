@@ -257,9 +257,20 @@ def fill_template(slips: list[dict], day_str: str, month_name: str,
     total_str    = f"{total:,.2f}"
     total_th_str = baht_text(total)
 
+    # วันที่ของเอกสาร (fromDate = toDate = วันนี้ เพราะ gen ต่อวัน)
+    # ดึงจาก slip แรกใน list
+    first = slips[0] if slips else {}
+    day_v  = first.get("day", "")
+    mon_v  = first.get("month", "")
+    yr_v   = first.get("year_ce", "")
+    yr_be  = yr_v + 543 if isinstance(yr_v, int) else ""
+    doc_date = f"{day_v}/{mon_v}/{yr_be}" if day_v else ""
+
     # แทน placeholders ทั้งหมด (รองรับ split across runs)
     _replace_text_in_doc(doc, "$intSumTotal", total_str)
     _replace_text_in_doc(doc, "$thSumTotal", total_th_str)
+    _replace_text_in_doc(doc, "$fromDate", doc_date)
+    _replace_text_in_doc(doc, "$toDate", doc_date)
 
     # บันทึก docx ชั่วคราว
     import tempfile

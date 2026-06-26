@@ -161,9 +161,15 @@ def run() -> dict:
                 with lock:
                     dup = find_duplicate(phash, hash_db)
                 if dup:
-                    print(f"⚠️  ซ้ำกับ '{dup['filename']}'")
+                    print(f"⚠️  ซ้ำ → '{img.name}' ซ้ำกับ '{dup['filename']}' (อยู่ที่ {dup['dest']})")
                     with lock:
                         results["duplicate"] += 1
+                        results["details"].append({
+                            "file": img.name,
+                            "status": "duplicate",
+                            "original": dup["filename"],
+                            "original_dest": dup["dest"],
+                        })
                     return
 
             # ── อ่าน slip (Claude API) ──
