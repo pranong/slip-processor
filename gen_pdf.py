@@ -22,6 +22,12 @@ from utils.thai_baht_text import baht_text
 from utils.state import load_state, save_state, mark_generated, is_generated
 from utils.vendor import find_vendor, load_vendors
 
+MONTH_MAP_NUM = {
+    "JAN": "01", "FEB": "02", "MAR": "03", "APR": "04",
+    "MAY": "05", "JUN": "06", "JUL": "07", "AUG": "08",
+    "SEP": "09", "OCT": "10", "NOV": "11", "DEC": "12",
+}
+
 # ── Routing ───────────────────────────────────────────────────────────────────
 # ย้ายไปอยู่ที่ config.py แล้ว — เพิ่ม/ลด keyword ได้ที่นั่น
 
@@ -474,7 +480,8 @@ def run() -> dict:
                         results["failed"] += 1
                         continue
 
-                    final_name   = "ใบรับรองแทนใบเสร็จรับเงิน"
+                    date_prefix  = f"{year_dir.name}{MONTH_MAP_NUM.get(month_dir.name, '00')}{day_dir.name}"
+                    final_name   = f"{date_prefix}-ใบรับรองแทนใบเสร็จรับเงิน"
                     renamed_docx = sub_docs / f"{final_name}.docx"
                     shutil.move(str(docx_path), str(renamed_docx))
 
@@ -488,31 +495,47 @@ def run() -> dict:
 
                     print(f"    ✅ ใบรับรองแทนใบเสร็จรับเงิน.pdf")
 
-                    # gen PDF ใบสำคัญรับเงิน (เฉพาะถ้าเจอ vendor)
-                    to_name = group_slips[0].get("to_name") or group_slips[0].get("to_account", "")
-                    vendor  = find_vendor(to_name, vendors)
-                    if vendor:
-                        # เพิ่ม vendor info เข้าทุก slip
-                        for s in group_slips:
+                    # ── gen ใบสำคัญรับเงิน แยกตาม vendor ──
+                    receipt_dir = sub_docs / "ใบสำคัญรับเงิน"
+
+                    # แยก slip ตาม to_name แล้ว lookup vendor แต่ละคน
+                    from collections import defaultdict
+                    slips_by_vendor: dict[str, list] = defaultdict(list)
+                    for s in group_slips:
+                        to_name = s.get("to_name") or s.get("to_account", "")
+                        slips_by_vendor[to_name].append(s)
+
+                    for to_name, vendor_slips in slips_by_vendor.items():
+                        vendor = find_vendor(to_name, vendors)
+                        if vendor is None:
+                            print(f"    ℹ️  ไม่เจอ vendor '{to_name}' — ข้ามใบสำคัญฯ")
+                            continue
+
+                        # เพิ่ม vendor info เข้าทุก slip ของคนนี้
+                        for s in vendor_slips:
                             s["vendor"] = vendor
+
+                        # ชื่อไฟล์ เช่น 20260624-นาย ประสิทธิ์.pdf
+                        date_prefix = f"{year_dir.name}{MONTH_MAP_NUM.get(month_dir.name, '00')}{day_dir.name}"
+                        safe_name   = to_name.replace("/", "-").replace("\\", "-")
+                        file_name   = f"{date_prefix}-{safe_name}"
+
+                        receipt_dir.mkdir(parents=True, exist_ok=True)
                         receipt_docx = fill_template_receipt(
-                            group_slips,
+                            vendor_slips,
                             day_dir.name,
                             month_dir.name,
                             year_dir.name,
                         )
                         if receipt_docx:
-                            receipt_name    = "ใบสำคัญรับเงิน"
-                            renamed_receipt = sub_docs / f"{receipt_name}.docx"
+                            renamed_receipt = receipt_dir / f"{file_name}.docx"
                             shutil.move(str(receipt_docx), str(renamed_receipt))
-                            receipt_pdf = convert_to_pdf(renamed_receipt, sub_docs)
+                            receipt_pdf = convert_to_pdf(renamed_receipt, receipt_dir)
                             renamed_receipt.unlink(missing_ok=True)
                             if receipt_pdf:
-                                print(f"    ✅ ใบสำคัญรับเงิน.pdf")
+                                print(f"    ✅ ใบสำคัญรับเงิน/{file_name}.pdf")
                             else:
-                                print(f"    ⚠️  ใบสำคัญรับเงิน convert ล้มเหลว")
-                    else:
-                        print(f"    ℹ️  ไม่เจอ vendor '{to_name}' — gen แค่ใบรับรองฯ")
+                                print(f"    ⚠️  {file_name} convert ล้มเหลว")
 
                     # บันทึก state local (เร็ว ไม่ต้องแตะ Drive)
                     mark_generated(state, year_dir.name, month_dir.name,
