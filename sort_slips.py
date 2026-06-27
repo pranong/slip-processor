@@ -246,8 +246,11 @@ def run() -> dict:
             to_account = info.get("to_account", "")
             vendor = find_vendor(to_account, vendors)
             if vendor is None:
+                # auto เพิ่มชื่อเข้า GSheet (ถ้ายังไม่มี)
+                from utils.vendor import auto_add_vendor
+                auto_add_vendor(to_account)
                 dest = safe_copy(img, data / "unclassified" / "no_vendor")
-                print(f"👤 หา vendor ไม่เจอ '{to_account}' → {dest}")
+                print(f"👤 หา vendor ไม่เจอ '{to_account}' → เพิ่ม GSheet แล้ว → {dest}")
                 with lock:
                     results["no_vendor"] += 1
                     results["details"].append({

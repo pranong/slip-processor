@@ -9,7 +9,6 @@ from config.config import (
     VENDOR_SHEET_NAME, FUZZY_THRESHOLD
 )
 
-# cache vendor list ไม่ต้องโหลดซ้ำทุกครั้ง
 _vendor_cache: list[dict] | None = None
 
 
@@ -18,11 +17,10 @@ def load_vendors(force_reload: bool = False) -> list[dict]:
     global _vendor_cache
     if _vendor_cache is not None and not force_reload:
         return _vendor_cache
-
     try:
-        gc     = gspread.service_account(filename=GSHEET_CREDENTIALS)
-        sh     = gc.open_by_key(GSHEET_ID)
-        ws     = sh.worksheet(VENDOR_SHEET_NAME)
+        gc      = gspread.service_account(filename=GSHEET_CREDENTIALS)
+        sh      = gc.open_by_key(GSHEET_ID)
+        ws      = sh.worksheet(VENDOR_SHEET_NAME)
         records = ws.get_all_records()
         _vendor_cache = records
         print(f"✅ โหลด vendor {len(records)} รายการจาก GSheet")
@@ -33,49 +31,64 @@ def load_vendors(force_reload: bool = False) -> list[dict]:
 
 
 def find_vendor(to_account: str, vendors: list[dict] | None = None) -> dict | None:
-    """
-    หา vendor จากชื่อผู้รับใน slip
-    ใช้ 3 ชั้น:
-      1. exact match
-      2. substring match (ชื่อใน Sheet อยู่ใน slip หรือกลับกัน)
-      3. fuzzy match > FUZZY_THRESHOLD
-    คืน vendor dict หรือ None ถ้าไม่เจอ
-    """
+    """หา vendor จากชื่อผู้รับใน slip — 3 ชั้น"""
     if vendors is None:
         vendors = load_vendors()
-
     if not vendors or not to_account:
         return None
 
     name_lower = to_account.lower().strip()
 
-    # ── ชั้น 1: exact match ──
+    # ชั้น 1: exact
     for v in vendors:
         if v.get("ชื่อ", "").lower().strip() == name_lower:
             return v
 
-    # ── ชั้น 2: substring match ──
+    # ชั้น 2: substring
     for v in vendors:
         vname = v.get("ชื่อ", "").lower().strip()
         if vname in name_lower or name_lower in vname:
             return v
 
-    # ── ชั้น 3: fuzzy match ──
+    # ชั้น 3: fuzzy
     names  = [v.get("ชื่อ", "") for v in vendors]
     result = process.extractOne(
-        to_account,
-        names,
+        to_account, names,
         scorer=fuzz.token_sort_ratio,
         score_cutoff=FUZZY_THRESHOLD,
     )
     if result:
-        matched_name = result[0]
         for v in vendors:
-            if v.get("ชื่อ") == matched_name:
-                print(f"    🔍 fuzzy match: '{to_account}' → '{matched_name}' ({result[1]:.0f}%)")
+            if v.get("ชื่อ") == result[0]:
+                print(f"    🔍 fuzzy match: '{to_account}' → '{result[0]}' ({result[1]:.0f}%)")
                 return v
-
     return None
+
+
+def auto_add_vendor(name: str) -> bool:
+    """
+    เพิ่มชื่อ vendor ใหม่เข้า GSheet (ชื่ออย่างเดียว รอกรอกรายละเอียดทีหลัง)
+    ถ้ามีชื่อนี้อยู่แล้วจะไม่เพิ่มซ้ำ
+    """
+    try:
+        vendors  = load_vendors(force_reload=True)
+        existing = [v.get("ชื่อ", "").strip().lower() for v in vendors]
+        if name.strip().lower() in existing:
+            print(f"    ℹ️  '{name}' มีอยู่แล้วใน GSheet")
+            return False
+
+        gc = gspread.service_account(filename=GSHEET_CREDENTIALS)
+        sh = gc.open_by_key(GSHEET_ID)
+        ws = sh.worksheet(VENDOR_SHEET_NAME)
+        ws.append_row([name, "", "", "", "", "", "", "", "", ""])
+        print(f"    ✅ เพิ่ม '{name}' เข้า GSheet แล้ว")
+
+        global _vendor_cache
+        _vendor_cache = None
+        return True
+    except Exception as e:
+        print(f"    ❌ เพิ่ม vendor ไม่ได้: {e}")
+        return False
 
 
 def reload_vendors():
