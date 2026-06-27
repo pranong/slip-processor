@@ -170,8 +170,16 @@ def run() -> dict:
 
     client   = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     hash_db  = load_hash_db()
-    results  = {"new": 0, "duplicate": 0, "failed": 0, "unclassified": 0, "details": []}
-    lock     = threading.Lock()  # ป้องกัน hash_db / results race condition
+    results  = {
+        "new": 0, "duplicate": 0, "failed": 0,
+        "no_note": 0, "invalid": 0, "no_vendor": 0,
+        "details": []
+    }
+    lock = threading.Lock()
+
+    # โหลด vendor list ใหม่ทุกครั้งที่ sort รัน (ให้ได้ข้อมูลล่าสุดจาก GSheet)
+    from utils.vendor import load_vendors, find_vendor
+    vendors = load_vendors(force_reload=True)
 
     def process_one(args):
         i, img = args
@@ -199,15 +207,15 @@ def run() -> dict:
             info = read_slip(client, img)
 
             if info is None:
-                unclass_dir = data / "unclassified"
-                dest = safe_copy(img, unclass_dir)
-                print(f"❓ อ่านไม่ได้ → {dest}")
+                # อ่านไม่ได้ / ไม่ใช่ slip โอนเงิน
+                dest = safe_copy(img, data / "unclassified" / "invalid")
+                print(f"❌ อ่านไม่ได้/ไม่ใช่ slip → {dest}")
                 with lock:
-                    results["unclassified"] += 1
-                    results["details"].append({"file": img.name, "status": "unclassified"})
+                    results["invalid"] += 1
+                    results["details"].append({"file": img.name, "status": "invalid"})
                 return
 
-            # ── เช็คซ้ำ ชั้นที่ 2 (phash + ref หลังได้ข้อมูลจาก API) ──
+            # ── เช็คซ้ำ ชั้นที่ 2 (phash + ref) ──
             ref = info.get("ref")
             if phash:
                 with lock:
@@ -224,16 +232,33 @@ def run() -> dict:
                         })
                     return
 
-            # ── เช็ค note — ถ้าไม่มีให้ไป unclassified ──
+            # ── เช็ค note ──
             note = info.get("note")
             if not note:
-                unclass_dir = data / "unclassified"
-                dest = safe_copy(img, unclass_dir)
+                dest = safe_copy(img, data / "unclassified" / "no_note")
                 print(f"❓ ไม่มี note → {dest}")
                 with lock:
-                    results["unclassified"] += 1
-                    results["details"].append({"file": img.name, "status": "unclassified", "reason": "no note"})
+                    results["no_note"] += 1
+                    results["details"].append({"file": img.name, "status": "no_note"})
                 return
+
+            # ── หา vendor จาก GSheet ──
+            to_account = info.get("to_account", "")
+            vendor = find_vendor(to_account, vendors)
+            if vendor is None:
+                dest = safe_copy(img, data / "unclassified" / "no_vendor")
+                print(f"👤 หา vendor ไม่เจอ '{to_account}' → {dest}")
+                with lock:
+                    results["no_vendor"] += 1
+                    results["details"].append({
+                        "file": img.name,
+                        "status": "no_vendor",
+                        "to_account": to_account,
+                    })
+                return
+
+            # ── เพิ่ม vendor info เข้า info ──
+            info["vendor"] = vendor
 
             # ── แยก folder ──
             year       = info["year_ce"]
@@ -282,9 +307,9 @@ def run() -> dict:
         executor.map(process_one, enumerate(images, 1))
 
     save_hash_db(hash_db)
-    print(f"\n{'='*50}")
-    print(f"✅ ใหม่: {results['new']}  ⚠️ ซ้ำ: {results['duplicate']}  "
-          f"❓ จัดไม่ได้: {results['unclassified']}  ❌ ล้มเหลว: {results['failed']}")
+    print(f"\n{'='*55}")
+    print(f"✅ ใหม่: {results['new']}  ⚠️ ซ้ำ: {results['duplicate']}")
+    print(f"❓ ไม่มี note: {results['no_note']}  ❌ อ่านไม่ได้: {results['invalid']}  👤 หา vendor ไม่เจอ: {results['no_vendor']}")
     return results
 
 

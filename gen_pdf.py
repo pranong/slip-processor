@@ -267,7 +267,99 @@ def fill_template(slips: list[dict], day_str: str, month_name: str,
     return tmp
 
 
-def convert_to_pdf(docx_path: Path, output_dir: Path) -> Path | None:
+def fill_template_receipt(slips: list[dict], day_str: str, month_name: str,
+                          year_thai: str) -> Path | None:
+    """
+    เติมข้อมูลลง template ใบสำคัญรับเงิน
+    placeholder ต่างจากใบรับรองฯ:
+    - vendor info: $vndName, $vndId, $vndAddress, $vndM, $vndSt, $vndZone, $vndCity, $vndProv
+    - ตาราง: $desc[0], $amountF[0], $amountSt[0]
+    - รวม: $intSumFTotal, $intSumStTotal, $thSumTotal
+    """
+    template_path = Path(TEMPLATE_DIR) / "ใบสำคัญรับเงิน.docx"
+    if not template_path.exists():
+        print(f"    ⚠️  ไม่พบ template: {template_path}")
+        return None
+
+    doc = DocxDocument(str(template_path))
+
+    if not doc.tables:
+        print("    ⚠️  ไม่พบตารางใน template ใบสำคัญรับเงิน")
+        return None
+
+    # ── vendor info (จาก slip แรก — vendor เดียวกันทั้งวัน) ──
+    first   = slips[0] if slips else {}
+    vendor  = first.get("vendor") or {}
+    day_v   = first.get("day", "")
+    mon_v   = first.get("month", "")
+    yr_v    = first.get("year_ce", "")
+    yr_be   = yr_v + 543 if isinstance(yr_v, int) else ""
+    doc_date = f"{day_v}/{mon_v}/{yr_be}" if day_v else ""
+
+    # แทน vendor placeholders
+    _replace_text_in_doc(doc, "$fromDate",   doc_date)
+    _replace_text_in_doc(doc, "$vndName",    vendor.get("ชื่อ", "-"))
+    _replace_text_in_doc(doc, "$vndId",      str(vendor.get("เลขผู้เสียภาษี", "-")))
+    _replace_text_in_doc(doc, "$vndAddress", str(vendor.get("บ้านเลขที่", "-")))
+    _replace_text_in_doc(doc, "$vndM",       str(vendor.get("หมู่", "-")))
+    _replace_text_in_doc(doc, "$vndSt",      str(vendor.get("ถนน", "-")))
+    _replace_text_in_doc(doc, "$vndZone",    str(vendor.get("แขวง/ตำบล", "-")))
+    _replace_text_in_doc(doc, "$vndCity",    str(vendor.get("เขต/อำเภอ", "-")))
+    _replace_text_in_doc(doc, "$vndProv",    str(vendor.get("จังหวัด", "-")))
+
+    # ── หาตาราง item (ที่มี $desc[0]) ──
+    item_table = None
+    for t in doc.tables:
+        text = "".join(cell.text for row in t.rows for cell in row.cells)
+        if "$desc[0]" in text:
+            item_table = t
+            break
+
+    if item_table is None:
+        print("    ⚠️  ไม่พบตาราง item ใน template ใบสำคัญรับเงิน")
+        return None
+
+    # หา template row
+    template_row_idx = None
+    for idx, row in enumerate(item_table.rows):
+        if "$desc[0]" in "".join(cell.text for cell in row.cells):
+            template_row_idx = idx
+            break
+
+    if template_row_idx is None:
+        return None
+
+    # clone rows
+    if len(slips) > 1:
+        for _ in range(len(slips) - 1):
+            _clone_row(item_table, template_row_idx)
+
+    # เติมข้อมูลแต่ละ row
+    total = 0
+    for i, slip in enumerate(slips):
+        tr      = item_table.rows[template_row_idx + i]._tr
+        amt     = slip.get("amount") or 0
+        amt_f   = int(amt)                              # บาท
+        amt_st  = round((amt - amt_f) * 100)           # สตางค์
+        desc    = slip.get("note") or slip.get("description") or "-"
+        total  += amt
+
+        _set_cell_text(tr, 0, desc)                    # รายการ
+        _set_cell_text(tr, 1, f"{amt_f:,}")            # บาท
+        _set_cell_text(tr, 2, f"{amt_st:02d}")         # สตางค์
+
+    # รวม
+    total_f  = int(total)
+    total_st = round((total - total_f) * 100)
+
+    _replace_text_in_doc(doc, "$intSumFTotal",  f"{total_f:,}")
+    _replace_text_in_doc(doc, "$intSumStTotal", f"{total_st:02d}")
+    _replace_text_in_doc(doc, "$thSumTotal",    baht_text(total))
+
+    import tempfile
+    tmp = Path(tempfile.mkdtemp()) / f"receipt_{month_name}_{day_str}.docx"
+    doc.save(str(tmp))
+    return tmp
     """แปลง docx เป็น PDF ด้วย LibreOffice"""
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -362,7 +454,7 @@ def run() -> dict:
                         "--config", str(Path.home() / ".config/rclone/rclone.conf"),
                     ], capture_output=True)
 
-                    # gen PDF
+                    # gen PDF ใบรับรองแทนใบเสร็จรับเงิน
                     docx_path = fill_template(
                         group_slips,
                         day_dir.name,
@@ -383,9 +475,30 @@ def run() -> dict:
                     renamed_docx.unlink(missing_ok=True)
 
                     if pdf_path is None:
-                        print(f"    ❌ [{sf}] convert PDF ล้มเหลว")
+                        print(f"    ❌ [{sf}] ใบรับรองฯ convert ล้มเหลว")
                         results["failed"] += 1
                         continue
+
+                    print(f"    ✅ ใบรับรองแทนใบเสร็จรับเงิน.pdf")
+
+                    # gen PDF ใบสำคัญรับเงิน
+                    receipt_docx = fill_template_receipt(
+                        group_slips,
+                        day_dir.name,
+                        month_dir.name,
+                        year_dir.name,
+                    )
+
+                    if receipt_docx:
+                        receipt_name   = "ใบสำคัญรับเงิน"
+                        renamed_receipt = sub_docs / f"{receipt_name}.docx"
+                        shutil.move(str(receipt_docx), str(renamed_receipt))
+                        receipt_pdf = convert_to_pdf(renamed_receipt, sub_docs)
+                        renamed_receipt.unlink(missing_ok=True)
+                        if receipt_pdf:
+                            print(f"    ✅ ใบสำคัญรับเงิน.pdf")
+                        else:
+                            print(f"    ⚠️  ใบสำคัญรับเงิน convert ล้มเหลว")
 
                     # บันทึก state local (เร็ว ไม่ต้องแตะ Drive)
                     mark_generated(state, year_dir.name, month_dir.name,

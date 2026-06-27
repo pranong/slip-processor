@@ -57,34 +57,46 @@ def check_mounts() -> str:
 
 
 def send_sort_summary(result: dict):
-    """ส่งสรุป sort พร้อมแจ้ง error/unclassified"""
+    """ส่งสรุป sort พร้อมแจ้ง error/unclassified แยกประเภท"""
     lines = [
         "📥 <b>Sort เสร็จแล้ว</b>",
         "─────────────────",
-        f"✅ ใหม่      : {result.get('new', 0)}",
-        f"⚠️  ซ้ำ       : {result.get('duplicate', 0)}",
-        f"❓ จัดไม่ได้ : {result.get('unclassified', 0)}",
-        f"❌ ล้มเหลว  : {result.get('failed', 0)}",
+        f"✅ ใหม่         : {result.get('new', 0)}",
+        f"⚠️  ซ้ำ          : {result.get('duplicate', 0)}",
+        f"❓ ไม่มี note   : {result.get('no_note', 0)}",
+        f"❌ อ่านไม่ได้   : {result.get('invalid', 0)}",
+        f"👤 หา vendor ไม่เจอ: {result.get('no_vendor', 0)}",
     ]
     send("\n".join(lines))
 
-    # แจ้ง unclassified แยก
-    unclass = [d for d in result.get("details", []) if d.get("status") == "unclassified"]
-    if unclass:
-        msg = [f"❓ <b>จัดไม่ได้ {len(unclass)} ไฟล์</b>", "กรุณาจัดการ manual ใน <code>unclassified/</code>", "─────────────────"]
-        for u in unclass[:10]:
-            reason = f" ({u.get('reason', '')})" if u.get("reason") else ""
-            msg.append(f"  - {u['file']}{reason}")
-        if len(unclass) > 10:
-            msg.append(f"  ... อีก {len(unclass) - 10} ไฟล์")
+    # แจ้ง no_note
+    no_note = [d for d in result.get("details", []) if d.get("status") == "no_note"]
+    if no_note:
+        msg = [f"❓ <b>ไม่มี note {len(no_note)} ไฟล์</b>", "→ <code>unclassified/no_note/</code>", "─────────────────"]
+        for u in no_note[:10]:
+            msg.append(f"  - {u['file']}")
+        if len(no_note) > 10:
+            msg.append(f"  ... อีก {len(no_note) - 10} ไฟล์")
         send("\n".join(msg))
 
-    # แจ้ง failed แยก
-    failed = [d for d in result.get("details", []) if d.get("status") == "failed"]
-    if failed:
-        msg = [f"❌ <b>ล้มเหลว {len(failed)} ไฟล์</b>"]
-        for f in failed[:10]:
-            msg.append(f"  - {f['file']}")
+    # แจ้ง invalid
+    invalid = [d for d in result.get("details", []) if d.get("status") == "invalid"]
+    if invalid:
+        msg = [f"❌ <b>อ่านไม่ได้ {len(invalid)} ไฟล์</b>", "→ <code>unclassified/invalid/</code>", "─────────────────"]
+        for u in invalid[:10]:
+            msg.append(f"  - {u['file']}")
+        if len(invalid) > 10:
+            msg.append(f"  ... อีก {len(invalid) - 10} ไฟล์")
+        send("\n".join(msg))
+
+    # แจ้ง no_vendor
+    no_vendor = [d for d in result.get("details", []) if d.get("status") == "no_vendor"]
+    if no_vendor:
+        msg = [f"👤 <b>หา vendor ไม่เจอ {len(no_vendor)} ไฟล์</b>", "→ เพิ่มใน masterMapping แล้วโยนรูปกลับ rawFile", "─────────────────"]
+        for u in no_vendor[:10]:
+            msg.append(f"  - {u['file']} ({u.get('to_account', '')})")
+        if len(no_vendor) > 10:
+            msg.append(f"  ... อีก {len(no_vendor) - 10} ไฟล์")
         send("\n".join(msg))
 
 
@@ -195,6 +207,10 @@ def handle_command(text: str):
 
     if cmd == "/status":
         send(check_mounts())
+    elif cmd == "/reloadvendor":
+        from utils.vendor import reload_vendors
+        vendors = reload_vendors()
+        send(f"✅ Reload vendor สำเร็จ — มี {len(vendors)} รายการ")
     elif cmd in ("/run", "/sort", "/gen"):
         run_command(cmd)
     elif cmd in ("/genyear", "/genmonth", "/genday"):
@@ -217,6 +233,7 @@ def handle_command(text: str):
             "/genYear -2026    — regen ทั้งปี\n"
             "/genMonth -2026/JUN — regen ทั้งเดือน\n"
             "/genDay -2026/JUN/24 — regen วันเดียว\n"
+            "/reloadvendor     — โหลด vendor จาก GSheet ใหม่\n"
             "/status           — เช็คสถานะ mount\n"
             "/help             — แสดงคำสั่ง"
         )

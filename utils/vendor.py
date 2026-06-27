@@ -1,0 +1,85 @@
+"""
+utils/vendor.py — โหลด vendor data จาก Google Sheets + fuzzy match
+"""
+
+import gspread
+from rapidfuzz import fuzz, process
+from config.config import (
+    GSHEET_CREDENTIALS, GSHEET_ID,
+    VENDOR_SHEET_NAME, FUZZY_THRESHOLD
+)
+
+# cache vendor list ไม่ต้องโหลดซ้ำทุกครั้ง
+_vendor_cache: list[dict] | None = None
+
+
+def load_vendors(force_reload: bool = False) -> list[dict]:
+    """โหลด vendor list จาก GSheet — cache ไว้ใน memory"""
+    global _vendor_cache
+    if _vendor_cache is not None and not force_reload:
+        return _vendor_cache
+
+    try:
+        gc     = gspread.service_account(filename=GSHEET_CREDENTIALS)
+        sh     = gc.open_by_key(GSHEET_ID)
+        ws     = sh.worksheet(VENDOR_SHEET_NAME)
+        records = ws.get_all_records()
+        _vendor_cache = records
+        print(f"✅ โหลด vendor {len(records)} รายการจาก GSheet")
+        return records
+    except Exception as e:
+        print(f"❌ โหลด GSheet ไม่ได้: {e}")
+        return []
+
+
+def find_vendor(to_account: str, vendors: list[dict] | None = None) -> dict | None:
+    """
+    หา vendor จากชื่อผู้รับใน slip
+    ใช้ 3 ชั้น:
+      1. exact match
+      2. substring match (ชื่อใน Sheet อยู่ใน slip หรือกลับกัน)
+      3. fuzzy match > FUZZY_THRESHOLD
+    คืน vendor dict หรือ None ถ้าไม่เจอ
+    """
+    if vendors is None:
+        vendors = load_vendors()
+
+    if not vendors or not to_account:
+        return None
+
+    name_lower = to_account.lower().strip()
+
+    # ── ชั้น 1: exact match ──
+    for v in vendors:
+        if v.get("ชื่อ", "").lower().strip() == name_lower:
+            return v
+
+    # ── ชั้น 2: substring match ──
+    for v in vendors:
+        vname = v.get("ชื่อ", "").lower().strip()
+        if vname in name_lower or name_lower in vname:
+            return v
+
+    # ── ชั้น 3: fuzzy match ──
+    names  = [v.get("ชื่อ", "") for v in vendors]
+    result = process.extractOne(
+        to_account,
+        names,
+        scorer=fuzz.token_sort_ratio,
+        score_cutoff=FUZZY_THRESHOLD,
+    )
+    if result:
+        matched_name = result[0]
+        for v in vendors:
+            if v.get("ชื่อ") == matched_name:
+                print(f"    🔍 fuzzy match: '{to_account}' → '{matched_name}' ({result[1]:.0f}%)")
+                return v
+
+    return None
+
+
+def reload_vendors():
+    """force reload vendor cache จาก GSheet"""
+    global _vendor_cache
+    _vendor_cache = None
+    return load_vendors()

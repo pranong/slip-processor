@@ -27,6 +27,12 @@ HASH_THRESHOLD    = 8
 TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN"
 TELEGRAM_CHAT_ID   = "YOUR_CHAT_ID"
 
+# ── Google Sheets ─────────────────────────────────────────────────────────────
+GSHEET_CREDENTIALS = f"{CODE_DIR}/config/gsheet_credentials.json"
+GSHEET_ID          = "1S8BF6RSufTDMnXzP9b8-QTOVc8FQtY80YtdmuvmlT_s"
+VENDOR_SHEET_NAME  = "vendor_detail"
+FUZZY_THRESHOLD    = 80
+
 # ── อื่นๆ ─────────────────────────────────────────────────────────────────────
 IMAGE_EXTS     = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 MONTH_MAP      = {
