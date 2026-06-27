@@ -15,7 +15,7 @@ from pathlib import Path
 import imagehash
 from PIL import Image
 
-from config import (
+from config.config import (
     RAW_MOUNT, DATA_MOUNT, HASH_DB_PATH,
     ANTHROPIC_API_KEY, CLAUDE_MODEL, HASH_THRESHOLD, MONTH_MAP, IMAGE_EXTS
 )

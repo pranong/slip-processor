@@ -14,7 +14,7 @@ import threading
 from pathlib import Path
 from datetime import datetime
 
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, RAW_MOUNT, DATA_MOUNT
+from config.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, RAW_MOUNT, DATA_MOUNT
 
 API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 OFFSET  = 0
@@ -145,7 +145,7 @@ def do_run(cmd: str):
 
 def reset_pdf_generated(path_filter: str) -> int:
     """Reset state local ตาม path filter — เร็วมาก ไม่แตะ Drive เลย"""
-    from state import load_state, save_state, reset_state
+    from utils.state import load_state, save_state, reset_state
     state = load_state()
     count = reset_state(state, path_filter)
     save_state(state)

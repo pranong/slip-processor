@@ -14,9 +14,9 @@ format:
 
 import json
 from pathlib import Path
-from config import CODE_DIR
+from config.config import CODE_DIR
 
-STATE_PATH = Path(CODE_DIR) / "generated_log.json"
+STATE_PATH = Path(CODE_DIR) / "data" / "generated_log.json"
 
 
 def load_state() -> dict:

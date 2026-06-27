@@ -6,7 +6,7 @@ CODE="/app/uan/slip-processor"
 MOUNT="/home/pi/slip-processor"
 TELEGRAM_BOT_TOKEN="YOUR_BOT_TOKEN"     # ← จาก @BotFather
 TELEGRAM_CHAT_ID="YOUR_CHAT_ID"         # ← จาก getUpdates API
-LOG="$CODE/logs/health.log"
+LOG="$CODE/data/logs/health.log"
 
 send_telegram() {
     if [ "$TELEGRAM_BOT_TOKEN" != "YOUR_BOT_TOKEN" ]; then

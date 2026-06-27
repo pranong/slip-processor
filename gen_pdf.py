@@ -16,10 +16,10 @@ from pathlib import Path
 from docx import Document as DocxDocument
 from docx.oxml.ns import qn
 
-from config import DATA_MOUNT, TEMPLATE_DIR, TEMPLATE_PATH, MONTH_MAP
-from gen_config import NOTE_ROUTES, NOTE_DEFAULT_SUBFOLDER, NOTE_DEFAULT_TEMPLATE
-from thai_baht_text import baht_text
-from state import load_state, save_state, mark_generated, is_generated
+from config.config import DATA_MOUNT, TEMPLATE_DIR, TEMPLATE_PATH, MONTH_MAP
+from config.gen_config import NOTE_ROUTES, NOTE_DEFAULT_SUBFOLDER, NOTE_DEFAULT_TEMPLATE
+from utils.thai_baht_text import baht_text
+from utils.state import load_state, save_state, mark_generated, is_generated
 
 # ── Routing ───────────────────────────────────────────────────────────────────
 # ย้ายไปอยู่ที่ config.py แล้ว — เพิ่ม/ลด keyword ได้ที่นั่น

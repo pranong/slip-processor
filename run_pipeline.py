@@ -8,10 +8,10 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from config import RAW_MOUNT, DATA_MOUNT, LOG_DIR, IMAGE_EXTS
+from config.config import RAW_MOUNT, DATA_MOUNT, LOG_DIR, IMAGE_EXTS
 import sort_slips
 import gen_pdf
-import notify
+from utils import notify as notify
 
 
 def setup_logging():
@@ -32,7 +32,7 @@ def setup_logging():
 
 def clear_raw_files():
     import subprocess
-    from config import RCLONE_REMOTE
+    from config.config import RCLONE_REMOTE
     result = subprocess.run([
         "rclone", "delete", f"{RCLONE_REMOTE}:SlipProcessor/rawFile",
         "--include", "*.jpg", "--include", "*.jpeg",

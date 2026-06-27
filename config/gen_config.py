@@ -17,11 +17,6 @@ NOTE_ROUTES = [
         "subfolder": "ceramic",
         "template":  "ใบรับรองแทนใบเสร็จรับเงินบริษัท.docx",
     },
-    {
-        "keyword":   "อวน",
-        "subfolder": "uan",
-        "template":  "ใบรับรองแทนใบเสร็จรับเงินบริษัท.docx",
-    },
     # ตัวอย่างเพิ่ม keyword ใหม่:
     # {
     #     "keyword":   "farm",

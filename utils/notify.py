@@ -9,7 +9,7 @@ notify.py — ส่งแจ้งเตือนผ่าน Telegram Bot
 """
 
 import requests
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+from config.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
 API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 

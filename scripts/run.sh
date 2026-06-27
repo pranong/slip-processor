@@ -1,10 +1,11 @@
 #!/bin/bash
 # run.sh — crontab รันไฟล์นี้ตอนตี 3
-# crontab: 0 3 * * * /app/uan/slip-processor/run.sh >> /app/uan/slip-processor/logs/cron.log 2>&1
+# crontab: 0 3 * * * /app/uan/slip-processor/run.sh >> /app/uan/slip-processor/data/logs/cron.log 2>&1
 
 CODE="/app/uan/slip-processor"
 MOUNT="/home/pi/slip-processor"
-export ANTHROPIC_API_KEY=$(python3 -c "from config import ANTHROPIC_API_KEY; print(ANTHROPIC_API_KEY)")
+cd "$CODE"
+export ANTHROPIC_API_KEY=$(python3 -c "from config.config import ANTHROPIC_API_KEY; print(ANTHROPIC_API_KEY)")
 
 echo ""
 echo "========================================"
