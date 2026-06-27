@@ -56,9 +56,9 @@ def check_mounts() -> str:
     return "\n".join(lines)
 
 
-def send_sort_summary(result: dict):
+def send_sort_summary(result: dict, elapsed: str = ""):
     lines = [
-        "📥 <b>Sort เสร็จแล้ว</b>",
+        f"📥 <b>Sort เสร็จแล้ว</b>{f' ({elapsed})' if elapsed else ''}",
         "─────────────────",
         f"✅ ใหม่         : {result.get('new', 0)}",
         f"⚠️  ซ้ำ          : {result.get('duplicate', 0)}",
@@ -86,10 +86,10 @@ def send_sort_summary(result: dict):
         send("\n".join(msg))
 
 
-def send_gen_summary(result: dict):
+def send_gen_summary(result: dict, elapsed: str = ""):
     """ส่งสรุป gen PDF"""
     lines = [
-        "📄 <b>Gen PDF เสร็จแล้ว</b>",
+        f"📄 <b>Gen PDF เสร็จแล้ว</b>{f' ({elapsed})' if elapsed else ''}",
         "─────────────────",
         f"✅ gen ใหม่  : {result.get('new', 0)}",
         f"❌ ล้มเหลว  : {result.get('failed', 0)}",
@@ -103,39 +103,63 @@ def send_gen_summary(result: dict):
     send("\n".join(lines))
 
 
+def fmt_duration(seconds: float) -> str:
+    """แปลงวินาทีเป็นข้อความ เช่น 1 นาที 23 วิ"""
+    s = int(seconds)
+    if s < 60:
+        return f"{s} วิ"
+    return f"{s // 60} นาที {s % 60} วิ"
+
+
 def do_run(cmd: str):
     global RUNNING
     import sort_slips
     import gen_pdf
+    import time
+    from datetime import datetime
 
     try:
         if cmd == "/sort":
-            send("🔄 เริ่ม sort slip...")
+            t0 = time.time()
+            send(f"🚀 Sort เริ่มแล้ว — {datetime.now().strftime('%H:%M:%S')}")
             result = sort_slips.run()
-            # reload vendor cache หลัง sort เสร็จ (เผื่อมีเพิ่มใหม่)
             from utils.vendor import reload_vendors
             reload_vendors()
-            send_sort_summary(result)
+            elapsed = fmt_duration(time.time() - t0)
+            send_sort_summary(result, elapsed)
 
         elif cmd == "/gen":
-            send("🔄 เริ่ม gen PDF...")
+            t0 = time.time()
+            send(f"🚀 Gen PDF เริ่มแล้ว — {datetime.now().strftime('%H:%M:%S')}")
             result = gen_pdf.run()
-            send_gen_summary(result)
+            elapsed = fmt_duration(time.time() - t0)
+            send_gen_summary(result, elapsed)
 
         elif cmd == "/run":
-            send("🔄 เริ่ม pipeline ทั้งหมด...")
+            t_total = time.time()
+            send(f"🚀 Pipeline เริ่มแล้ว — {datetime.now().strftime('%H:%M:%S')}")
 
+            # sort
+            t0 = time.time()
             sort_result = sort_slips.run()
-            # reload vendor cache หลัง sort
             from utils.vendor import reload_vendors
             reload_vendors()
-            send_sort_summary(sort_result)
+            sort_elapsed = fmt_duration(time.time() - t0)
+            send_sort_summary(sort_result, sort_elapsed)
 
+            # clear
             from run_pipeline import clear_raw_files
             clear_raw_files()
 
+            # gen
+            t0 = time.time()
             gen_result = gen_pdf.run()
-            send_gen_summary(gen_result)
+            gen_elapsed = fmt_duration(time.time() - t0)
+            send_gen_summary(gen_result, gen_elapsed)
+
+            # รวม
+            total_elapsed = fmt_duration(time.time() - t_total)
+            send(f"✅ Pipeline เสร็จสิ้น\n⏱ รวม: {total_elapsed}")
 
     except Exception as e:
         import traceback
@@ -159,14 +183,18 @@ def reset_pdf_generated(path_filter: str) -> int:
 def do_regen(scope: str):
     """regen ตาม scope เช่น 2026 / 2026/JUN / 2026/JUN/24"""
     global RUNNING
+    import time
+    from datetime import datetime
     try:
         import gen_pdf
-        send(f"🔄 Reset และ regen: <code>{scope}</code>...")
+        t0 = time.time()
+        send(f"🚀 Regen เริ่มแล้ว — {datetime.now().strftime('%H:%M:%S')}\nscope: <code>{scope}</code>")
         count = reset_pdf_generated(scope)
         send(f"♻️ Reset {count} groups — กำลัง gen...")
         result = gen_pdf.run()
+        elapsed = fmt_duration(time.time() - t0)
         send(f"📄 <b>Regen เสร็จแล้ว ({scope})</b>")
-        send_gen_summary(result)
+        send_gen_summary(result, elapsed)
     except Exception as e:
         import traceback
         send(f"❌ เกิดข้อผิดพลาด\n<code>{e}</code>")
