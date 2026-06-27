@@ -66,11 +66,25 @@ def get_phash(path: Path) -> str | None:
         return None
 
 
-def find_duplicate(phash_str: str, db: dict) -> dict | None:
+PHASH_EXACT     = 3   # ≤3 = ซ้ำแน่นอน ไม่ต้องเช็ค ref
+PHASH_UNCERTAIN = 8   # 4-8 = ไม่แน่ใจ ต้องเช็ค ref ด้วย
+
+
+def find_duplicate(phash_str: str, db: dict, ref: str | None = None) -> dict | None:
+    """
+    เช็คซ้ำ 2 ชั้น:
+    - phash ≤ 3  → ซ้ำแน่นอน
+    - phash 4-8  → เช็ค ref ด้วย ถ้า ref ตรง = ซ้ำ
+    - phash > 8  → ไม่ซ้ำ
+    """
     current = imagehash.hex_to_hash(phash_str)
     for stored_str, record in db.items():
-        if (current - imagehash.hex_to_hash(stored_str)) <= HASH_THRESHOLD:
-            return record
+        diff = current - imagehash.hex_to_hash(stored_str)
+        if diff <= PHASH_EXACT:
+            return record  # ซ้ำแน่นอน
+        if diff <= PHASH_UNCERTAIN and ref and record.get("ref"):
+            if ref == record["ref"]:
+                return record  # ref ตรง = ซ้ำ
     return None
 
 # ── Claude API ────────────────────────────────────────────────────────────────
@@ -155,11 +169,11 @@ def run() -> dict:
         try:
             print(f"[{i:4d}/{len(images)}] {img.name}", end=" ... ")
 
-            # ── เช็คซ้ำ ──
+            # ── เช็คซ้ำ ชั้นที่ 1 (phash เท่านั้น ยังไม่มี ref) ──
             phash = get_phash(img)
             if phash:
                 with lock:
-                    dup = find_duplicate(phash, hash_db)
+                    dup = find_duplicate(phash, hash_db, ref=None)
                 if dup:
                     print(f"⚠️  ซ้ำ → '{img.name}' ซ้ำกับ '{dup['filename']}' (อยู่ที่ {dup['dest']})")
                     with lock:
@@ -183,6 +197,23 @@ def run() -> dict:
                     results["unclassified"] += 1
                     results["details"].append({"file": img.name, "status": "unclassified"})
                 return
+
+            # ── เช็คซ้ำ ชั้นที่ 2 (phash + ref หลังได้ข้อมูลจาก API) ──
+            ref = info.get("ref")
+            if phash:
+                with lock:
+                    dup = find_duplicate(phash, hash_db, ref=ref)
+                if dup:
+                    print(f"⚠️  ซ้ำ (ref) → '{img.name}' ซ้ำกับ '{dup['filename']}' ref={ref}")
+                    with lock:
+                        results["duplicate"] += 1
+                        results["details"].append({
+                            "file": img.name,
+                            "status": "duplicate",
+                            "original": dup["filename"],
+                            "ref": ref,
+                        })
+                    return
 
             # ── เช็ค note — ถ้าไม่มีให้ไป unclassified ──
             note = info.get("note")
@@ -222,7 +253,8 @@ def run() -> dict:
                     hash_db[phash] = {
                         "filename": img.name,
                         "dest": str(dest_img),
-                        "day": day, "month": month, "year": year
+                        "day": day, "month": month, "year": year,
+                        "ref": info.get("ref"),
                     }
                 results["new"] += 1
                 results["details"].append({

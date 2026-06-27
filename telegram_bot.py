@@ -56,81 +56,82 @@ def check_mounts() -> str:
     return "\n".join(lines)
 
 
+def send_sort_summary(result: dict):
+    """ส่งสรุป sort พร้อมแจ้ง error/unclassified"""
+    lines = [
+        "📥 <b>Sort เสร็จแล้ว</b>",
+        "─────────────────",
+        f"✅ ใหม่      : {result.get('new', 0)}",
+        f"⚠️  ซ้ำ       : {result.get('duplicate', 0)}",
+        f"❓ จัดไม่ได้ : {result.get('unclassified', 0)}",
+        f"❌ ล้มเหลว  : {result.get('failed', 0)}",
+    ]
+    send("\n".join(lines))
+
+    # แจ้ง unclassified แยก
+    unclass = [d for d in result.get("details", []) if d.get("status") == "unclassified"]
+    if unclass:
+        msg = [f"❓ <b>จัดไม่ได้ {len(unclass)} ไฟล์</b>", "กรุณาจัดการ manual ใน <code>unclassified/</code>", "─────────────────"]
+        for u in unclass[:10]:
+            reason = f" ({u.get('reason', '')})" if u.get("reason") else ""
+            msg.append(f"  - {u['file']}{reason}")
+        if len(unclass) > 10:
+            msg.append(f"  ... อีก {len(unclass) - 10} ไฟล์")
+        send("\n".join(msg))
+
+    # แจ้ง failed แยก
+    failed = [d for d in result.get("details", []) if d.get("status") == "failed"]
+    if failed:
+        msg = [f"❌ <b>ล้มเหลว {len(failed)} ไฟล์</b>"]
+        for f in failed[:10]:
+            msg.append(f"  - {f['file']}")
+        send("\n".join(msg))
+
+
+def send_gen_summary(result: dict):
+    """ส่งสรุป gen PDF"""
+    lines = [
+        "📄 <b>Gen PDF เสร็จแล้ว</b>",
+        "─────────────────",
+        f"✅ gen ใหม่  : {result.get('new', 0)}",
+        f"❌ ล้มเหลว  : {result.get('failed', 0)}",
+    ]
+    monthly = result.get("monthly", {})
+    if monthly:
+        lines.append("─────────────────")
+        lines.append("💰 ยอดรายจ่ายรอบนี้:")
+        for m in sorted(monthly.keys()):
+            lines.append(f"  {m}: ฿{monthly[m]:,.0f}")
+    send("\n".join(lines))
+
+
 def do_run(cmd: str):
     global RUNNING
     import sort_slips
     import gen_pdf
-    import notify
 
     try:
         if cmd == "/sort":
             send("🔄 เริ่ม sort slip...")
             result = sort_slips.run()
-            lines = [
-                "📥 <b>Sort เสร็จแล้ว</b>",
-                "─────────────────",
-                f"✅ ใหม่      : {result.get('new', 0)}",
-                f"⚠️  ซ้ำ       : {result.get('duplicate', 0)}",
-                f"❓ จัดไม่ได้ : {result.get('unclassified', 0)}",
-                f"❌ ล้มเหลว  : {result.get('failed', 0)}",
-            ]
-            send("\n".join(lines))
-            if result.get("unclassified", 0) > 0:
-                send(notify.build_unclassified_message(result))
+            send_sort_summary(result)
 
         elif cmd == "/gen":
             send("🔄 เริ่ม gen PDF...")
             result = gen_pdf.run()
-            lines = [
-                "📄 <b>Gen PDF เสร็จแล้ว</b>",
-                "─────────────────",
-                f"✅ gen ใหม่  : {result.get('new', 0)}",
-                f"❌ ล้มเหลว  : {result.get('failed', 0)}",
-            ]
-            monthly = result.get("monthly", {})
-            if monthly:
-                lines.append("─────────────────")
-                lines.append("💰 ยอดรายจ่ายรอบนี้:")
-                for m in sorted(monthly.keys()):
-                    lines.append(f"  {m}: ฿{monthly[m]:,.0f}")
-            send("\n".join(lines))
+            send_gen_summary(result)
 
         elif cmd == "/run":
             send("🔄 เริ่ม pipeline ทั้งหมด...")
 
-            # sort
             sort_result = sort_slips.run()
-            lines = [
-                "📥 <b>Sort เสร็จแล้ว</b>",
-                "─────────────────",
-                f"✅ ใหม่      : {sort_result.get('new', 0)}",
-                f"⚠️  ซ้ำ       : {sort_result.get('duplicate', 0)}",
-                f"❓ จัดไม่ได้ : {sort_result.get('unclassified', 0)}",
-                f"❌ ล้มเหลว  : {sort_result.get('failed', 0)}",
-            ]
-            send("\n".join(lines))
-            if sort_result.get("unclassified", 0) > 0:
-                send(notify.build_unclassified_message(sort_result))
+            send_sort_summary(sort_result)
 
-            # clear raw
             from run_pipeline import clear_raw_files
             clear_raw_files()
 
-            # gen
             gen_result = gen_pdf.run()
-            lines2 = [
-                "📄 <b>Gen PDF เสร็จแล้ว</b>",
-                "─────────────────",
-                f"✅ gen ใหม่  : {gen_result.get('new', 0)}",
-                f"❌ ล้มเหลว  : {gen_result.get('failed', 0)}",
-            ]
-            monthly = gen_result.get("monthly", {})
-            if monthly:
-                lines2.append("─────────────────")
-                lines2.append("💰 ยอดรายจ่ายรอบนี้:")
-                for m in sorted(monthly.keys()):
-                    lines2.append(f"  {m}: ฿{monthly[m]:,.0f}")
-            send("\n".join(lines2))
+            send_gen_summary(gen_result)
 
     except Exception as e:
         import traceback
@@ -158,21 +159,10 @@ def do_regen(scope: str):
         import gen_pdf
         send(f"🔄 Reset และ regen: <code>{scope}</code>...")
         count = reset_pdf_generated(scope)
-        send(f"♻️ Reset {count} รายการ — กำลัง gen...")
+        send(f"♻️ Reset {count} groups — กำลัง gen...")
         result = gen_pdf.run()
-        lines = [
-            f"📄 <b>Regen เสร็จแล้ว ({scope})</b>",
-            "─────────────────",
-            f"✅ gen ใหม่  : {result.get('new', 0)}",
-            f"❌ ล้มเหลว  : {result.get('failed', 0)}",
-        ]
-        monthly = result.get("monthly", {})
-        if monthly:
-            lines.append("─────────────────")
-            lines.append("💰 ยอดรวม:")
-            for m in sorted(monthly.keys()):
-                lines.append(f"  {m}: ฿{monthly[m]:,.0f}")
-        send("\n".join(lines))
+        send(f"📄 <b>Regen เสร็จแล้ว ({scope})</b>")
+        send_gen_summary(result)
     except Exception as e:
         import traceback
         send(f"❌ เกิดข้อผิดพลาด\n<code>{e}</code>")
