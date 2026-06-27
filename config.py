@@ -1,5 +1,6 @@
 """
 config.py — ตั้งค่าทั้งหมดที่นี่ที่เดียว
+สำหรับ routing ของ gen PDF ดูที่ gen_config.py
 """
 
 # ── Google Drive (rclone remote name) ─────────────────────────────────────────

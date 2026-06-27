@@ -17,39 +17,26 @@ from docx import Document as DocxDocument
 from docx.oxml.ns import qn
 
 from config import DATA_MOUNT, TEMPLATE_DIR, TEMPLATE_PATH, MONTH_MAP
+from gen_config import NOTE_ROUTES, NOTE_DEFAULT_SUBFOLDER, NOTE_DEFAULT_TEMPLATE
 from thai_baht_text import baht_text
 from state import load_state, save_state, mark_generated, is_generated
 
-# ── Routing config ────────────────────────────────────────────────────────────
-# เพิ่ม keyword ใหม่ได้ที่นี่
-NOTE_ROUTES = [
-    {
-        "prefix": "uan",
-        "subfolder": "uan",
-        "template": "ใบรับรองแทนใบเสร็จรับเงินบริษัท.docx",
-    },
-    {
-        "prefix": "ceramic",
-        "subfolder": "ceramic",
-        "template": "ใบรับรองแทนใบเสร็จรับเงินบริษัท.docx",
-    },
-]
-DEFAULT_SUBFOLDER = "บุคคล"
-DEFAULT_TEMPLATE  = "ใบรับรองแทนใบเสร็จรับเงิน.docx"
+# ── Routing ───────────────────────────────────────────────────────────────────
+# ย้ายไปอยู่ที่ config.py แล้ว — เพิ่ม/ลด keyword ได้ที่นั่น
 
 
 def get_route(note: str) -> dict:
-    """หา subfolder และ template จาก note"""
-    note_lower = (note or "").lower().strip()
+    """หา subfolder และ template จาก note — เจอ keyword ที่ไหนก็ได้ ไม่ case sensitive"""
+    note_lower = (note or "").lower()
     for route in NOTE_ROUTES:
-        if note_lower.startswith(route["prefix"].lower()):
+        if route["keyword"].lower() in note_lower:
             return {
                 "subfolder": route["subfolder"],
                 "template":  Path(TEMPLATE_DIR) / route["template"],
             }
     return {
-        "subfolder": DEFAULT_SUBFOLDER,
-        "template":  Path(TEMPLATE_DIR) / DEFAULT_TEMPLATE,
+        "subfolder": NOTE_DEFAULT_SUBFOLDER,
+        "template":  Path(TEMPLATE_DIR) / NOTE_DEFAULT_TEMPLATE,
     }
 
 # ── Summary ───────────────────────────────────────────────────────────────────
