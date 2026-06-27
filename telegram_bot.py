@@ -126,6 +126,9 @@ def do_run(cmd: str):
         if cmd == "/sort":
             send("🔄 เริ่ม sort slip...")
             result = sort_slips.run()
+            # reload vendor cache หลัง sort เสร็จ (เผื่อมีเพิ่มใหม่)
+            from utils.vendor import reload_vendors
+            reload_vendors()
             send_sort_summary(result)
 
         elif cmd == "/gen":
@@ -137,6 +140,9 @@ def do_run(cmd: str):
             send("🔄 เริ่ม pipeline ทั้งหมด...")
 
             sort_result = sort_slips.run()
+            # reload vendor cache หลัง sort
+            from utils.vendor import reload_vendors
+            reload_vendors()
             send_sort_summary(sort_result)
 
             from run_pipeline import clear_raw_files

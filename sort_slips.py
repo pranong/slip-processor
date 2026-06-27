@@ -33,12 +33,13 @@ SYSTEM_PROMPT = """คุณคือระบบดึงข้อมูลจ�
   "amount": <จำนวนเงิน ตัวเลขเท่านั้น>,
   "note": "<ข้อความใน Note / บันทึกช่วยจำ / หมายเหตุ ของ slip ถ้าไม่มีให้ใส่ null>",
   "from_account": "<ชื่อผู้โอน หรือ เลขบัญชี>",
-  "to_account": "<ชื่อผู้รับ หรือ เลขบัญชี>",
+  "to_name": "<ชื่อ-นามสกุล ผู้รับเท่านั้น ไม่เอาเลขบัญชี ไม่เอาชื่อธนาคาร ไม่เอาเลข ref>",
+  "to_account": "<ข้อมูลผู้รับเต็มๆ รวมเลขบัญชีและธนาคาร>",
   "bank": "<ธนาคาร>",
   "ref": "<เลข reference/transaction ID>"
 }
 หมายเหตุ:
-- field "note" คือข้อความที่อยู่ในช่อง Note / บันทึกช่วยจำ / หมายเหตุ / บันทึก ของ slip เท่านั้น
+- to_name คือชื่อ-นามสกุลสะอาดๆ เช่น "นาย วุฒิ กล่ำนคร" หรือ "หจก. ทริปเปิลเอ็น"
 - ถ้าไม่พบข้อมูลใดให้ใส่ null
 - ถ้าปีเป็น พ.ศ. ให้แปลงเป็น ค.ศ. (พ.ศ. - 543 = ค.ศ.)
 - ถ้าหาวันที่ไม่ได้เลยให้ตอบ: {"error": "date not found"}"""
@@ -244,19 +245,20 @@ def run() -> dict:
 
             # ── หา vendor จาก GSheet ──
             to_account = info.get("to_account", "")
-            vendor = find_vendor(to_account, vendors)
+            to_name    = info.get("to_name") or to_account  # ชื่อสะอาด
+            vendor = find_vendor(to_name, vendors)
             if vendor is None:
-                # auto เพิ่มชื่อเข้า GSheet (ถ้ายังไม่มี)
+                # auto เพิ่มชื่อสะอาดเข้า GSheet (ถ้ายังไม่มี)
                 from utils.vendor import auto_add_vendor
-                auto_add_vendor(to_account)
+                auto_add_vendor(to_name)
                 dest = safe_copy(img, data / "unclassified" / "no_vendor")
-                print(f"👤 หา vendor ไม่เจอ '{to_account}' → เพิ่ม GSheet แล้ว → {dest}")
+                print(f"👤 หา vendor ไม่เจอ '{to_name}' → เพิ่ม GSheet แล้ว → {dest}")
                 with lock:
                     results["no_vendor"] += 1
                     results["details"].append({
                         "file": img.name,
                         "status": "no_vendor",
-                        "to_account": to_account,
+                        "to_account": to_name,
                     })
                 return
 
