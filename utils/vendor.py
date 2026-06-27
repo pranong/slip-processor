@@ -65,32 +65,6 @@ def find_vendor(to_account: str, vendors: list[dict] | None = None) -> dict | No
     return None
 
 
-def auto_add_vendor(name: str) -> bool:
-    """
-    เพิ่มชื่อ vendor ใหม่เข้า GSheet (ชื่ออย่างเดียว รอกรอกรายละเอียดทีหลัง)
-    ถ้ามีชื่อนี้อยู่แล้วจะไม่เพิ่มซ้ำ
-    """
-    try:
-        vendors  = load_vendors(force_reload=True)
-        existing = [v.get("ชื่อ", "").strip().lower() for v in vendors]
-        if name.strip().lower() in existing:
-            print(f"    ℹ️  '{name}' มีอยู่แล้วใน GSheet")
-            return False
-
-        gc = gspread.service_account(filename=GSHEET_CREDENTIALS)
-        sh = gc.open_by_key(GSHEET_ID)
-        ws = sh.worksheet(VENDOR_SHEET_NAME)
-        ws.append_row([name, "", "", "", "", "", "", "", "", ""])
-        print(f"    ✅ เพิ่ม '{name}' เข้า GSheet แล้ว")
-
-        global _vendor_cache
-        _vendor_cache = None
-        return True
-    except Exception as e:
-        print(f"    ❌ เพิ่ม vendor ไม่ได้: {e}")
-        return False
-
-
 def reload_vendors():
     """force reload vendor cache จาก GSheet"""
     global _vendor_cache

@@ -57,7 +57,6 @@ def check_mounts() -> str:
 
 
 def send_sort_summary(result: dict):
-    """ส่งสรุป sort พร้อมแจ้ง error/unclassified แยกประเภท"""
     lines = [
         "📥 <b>Sort เสร็จแล้ว</b>",
         "─────────────────",
@@ -65,11 +64,9 @@ def send_sort_summary(result: dict):
         f"⚠️  ซ้ำ          : {result.get('duplicate', 0)}",
         f"❓ ไม่มี note   : {result.get('no_note', 0)}",
         f"❌ อ่านไม่ได้   : {result.get('invalid', 0)}",
-        f"👤 หา vendor ไม่เจอ: {result.get('no_vendor', 0)}",
     ]
     send("\n".join(lines))
 
-    # แจ้ง no_note
     no_note = [d for d in result.get("details", []) if d.get("status") == "no_note"]
     if no_note:
         msg = [f"❓ <b>ไม่มี note {len(no_note)} ไฟล์</b>", "→ <code>unclassified/no_note/</code>", "─────────────────"]
@@ -79,7 +76,6 @@ def send_sort_summary(result: dict):
             msg.append(f"  ... อีก {len(no_note) - 10} ไฟล์")
         send("\n".join(msg))
 
-    # แจ้ง invalid
     invalid = [d for d in result.get("details", []) if d.get("status") == "invalid"]
     if invalid:
         msg = [f"❌ <b>อ่านไม่ได้ {len(invalid)} ไฟล์</b>", "→ <code>unclassified/invalid/</code>", "─────────────────"]
@@ -87,16 +83,6 @@ def send_sort_summary(result: dict):
             msg.append(f"  - {u['file']}")
         if len(invalid) > 10:
             msg.append(f"  ... อีก {len(invalid) - 10} ไฟล์")
-        send("\n".join(msg))
-
-    # แจ้ง no_vendor
-    no_vendor = [d for d in result.get("details", []) if d.get("status") == "no_vendor"]
-    if no_vendor:
-        msg = [f"👤 <b>หา vendor ไม่เจอ {len(no_vendor)} ไฟล์</b>", "→ เพิ่มใน masterMapping แล้วโยนรูปกลับ rawFile", "─────────────────"]
-        for u in no_vendor[:10]:
-            msg.append(f"  - {u['file']} ({u.get('to_account', '')})")
-        if len(no_vendor) > 10:
-            msg.append(f"  ... อีก {len(no_vendor) - 10} ไฟล์")
         send("\n".join(msg))
 
 

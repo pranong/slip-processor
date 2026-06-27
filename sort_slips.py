@@ -160,27 +160,23 @@ def run() -> dict:
 
     if not raw.exists():
         print("❌ rawFile mount ไม่พบ — เช็ค mount ก่อน")
-        return {"new": 0, "duplicate": 0, "failed": 0, "unclassified": 0}
+        return {"new": 0, "duplicate": 0, "no_note": 0, "invalid": 0}
 
     images = [f for f in sorted(raw.iterdir()) if f.suffix.lower() in IMAGE_EXTS]
     if not images:
         print("ℹ️  ไม่มีรูปใหม่")
-        return {"new": 0, "duplicate": 0, "failed": 0, "unclassified": 0}
+        return {"new": 0, "duplicate": 0, "no_note": 0, "invalid": 0}
 
     print(f"📂 พบรูปใหม่ {len(images)} ไฟล์")
 
     client   = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     hash_db  = load_hash_db()
     results  = {
-        "new": 0, "duplicate": 0, "failed": 0,
-        "no_note": 0, "invalid": 0, "no_vendor": 0,
+        "new": 0, "duplicate": 0,
+        "no_note": 0, "invalid": 0,
         "details": []
     }
     lock = threading.Lock()
-
-    # โหลด vendor list ใหม่ทุกครั้งที่ sort รัน (ให้ได้ข้อมูลล่าสุดจาก GSheet)
-    from utils.vendor import load_vendors, find_vendor
-    vendors = load_vendors(force_reload=True)
 
     def process_one(args):
         i, img = args
@@ -243,28 +239,6 @@ def run() -> dict:
                     results["details"].append({"file": img.name, "status": "no_note"})
                 return
 
-            # ── หา vendor จาก GSheet ──
-            to_account = info.get("to_account", "")
-            to_name    = info.get("to_name") or to_account  # ชื่อสะอาด
-            vendor = find_vendor(to_name, vendors)
-            if vendor is None:
-                # auto เพิ่มชื่อสะอาดเข้า GSheet (ถ้ายังไม่มี)
-                from utils.vendor import auto_add_vendor
-                auto_add_vendor(to_name)
-                dest = safe_copy(img, data / "unclassified" / "no_vendor")
-                print(f"👤 หา vendor ไม่เจอ '{to_name}' → เพิ่ม GSheet แล้ว → {dest}")
-                with lock:
-                    results["no_vendor"] += 1
-                    results["details"].append({
-                        "file": img.name,
-                        "status": "no_vendor",
-                        "to_account": to_name,
-                    })
-                return
-
-            # ── เพิ่ม vendor info เข้า info ──
-            info["vendor"] = vendor
-
             # ── แยก folder ──
             year       = info["year_ce"]
             month      = info["month"]
@@ -313,8 +287,7 @@ def run() -> dict:
 
     save_hash_db(hash_db)
     print(f"\n{'='*55}")
-    print(f"✅ ใหม่: {results['new']}  ⚠️ ซ้ำ: {results['duplicate']}")
-    print(f"❓ ไม่มี note: {results['no_note']}  ❌ อ่านไม่ได้: {results['invalid']}  👤 หา vendor ไม่เจอ: {results['no_vendor']}")
+    print(f"✅ ใหม่: {results['new']}  ⚠️ ซ้ำ: {results['duplicate']}  ❓ ไม่มี note: {results['no_note']}  ❌ อ่านไม่ได้: {results['invalid']}")
     return results
 
 
