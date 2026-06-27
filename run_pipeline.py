@@ -56,21 +56,28 @@ def check_mounts() -> bool:
     return raw_ok and data_ok
 
 
-def build_sort_message(sort_result: dict) -> str:
+def fmt_duration(seconds: float) -> str:
+    s = int(seconds)
+    if s < 60:
+        return f"{s} วิ"
+    return f"{s // 60} นาที {s % 60} วิ"
+
+
+def build_sort_message(sort_result: dict, elapsed: str = "") -> str:
     lines = [
-        "📥 Sort เสร็จแล้ว",
+        f"📥 Sort เสร็จแล้ว{f' ({elapsed})' if elapsed else ''}",
         "─────────────────",
-        f"✅ ใหม่      : {sort_result.get('new', 0)}",
-        f"⚠️  ซ้ำ       : {sort_result.get('duplicate', 0)}",
-        f"❓ จัดไม่ได้ : {sort_result.get('unclassified', 0)}",
-        f"❌ ล้มเหลว  : {sort_result.get('failed', 0)}",
+        f"✅ ใหม่         : {sort_result.get('new', 0)}",
+        f"⚠️  ซ้ำ          : {sort_result.get('duplicate', 0)}",
+        f"❓ ไม่มี note   : {sort_result.get('no_note', 0)}",
+        f"❌ อ่านไม่ได้   : {sort_result.get('invalid', 0)}",
     ]
     return "\n".join(lines)
 
 
-def build_gen_message(gen_result: dict) -> str:
+def build_gen_message(gen_result: dict, elapsed: str = "") -> str:
     lines = [
-        "📄 Gen PDF เสร็จแล้ว",
+        f"📄 Gen PDF เสร็จแล้ว{f' ({elapsed})' if elapsed else ''}",
         "─────────────────",
         f"✅ gen ใหม่  : {gen_result.get('new', 0)}",
         f"❌ ล้มเหลว  : {gen_result.get('failed', 0)}",
@@ -85,35 +92,57 @@ def build_gen_message(gen_result: dict) -> str:
 
 
 def main():
+    import time
+    t_total = time.time()
+
     print("=" * 55)
     print(f"▶ Slip Processor — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 55)
 
     log_file = setup_logging()
 
-    # ── เช็ค mount ──
     if not check_mounts():
         sys.exit(1)
 
+    notify.send(f"🚀 Pipeline เริ่มแล้ว — {datetime.now().strftime('%H:%M:%S')}")
+
     # ── 1. sort slips ──
     print("\n── ขั้นตอน 1: sort ──")
+    t0 = time.time()
     sort_result = sort_slips.run()
+    sort_elapsed = fmt_duration(time.time() - t0)
 
-    # ── แจ้ง sort ──
-    notify.send(build_sort_message(sort_result))
-    if sort_result.get("unclassified", 0) > 0:
-        notify.send(notify.build_unclassified_message(sort_result))
+    notify.send(build_sort_message(sort_result, sort_elapsed))
+
+    # แจ้ง unclassified
+    no_note = [d for d in sort_result.get("details", []) if d.get("status") == "no_note"]
+    if no_note:
+        lines = [f"❓ ไม่มี note {len(no_note)} ไฟล์ → unclassified/no_note/"]
+        for u in no_note[:10]:
+            lines.append(f"  - {u['file']}")
+        notify.send("\n".join(lines))
+
+    invalid = [d for d in sort_result.get("details", []) if d.get("status") == "invalid"]
+    if invalid:
+        lines = [f"❌ อ่านไม่ได้ {len(invalid)} ไฟล์ → unclassified/invalid/"]
+        for u in invalid[:10]:
+            lines.append(f"  - {u['file']}")
+        notify.send("\n".join(lines))
 
     # ── 2. gen PDF ──
     print("\n── ขั้นตอน 2: gen PDF ──")
+    t0 = time.time()
     gen_result = gen_pdf.run()
+    gen_elapsed = fmt_duration(time.time() - t0)
 
-    # ── แจ้ง gen ──
-    notify.send(build_gen_message(gen_result))
+    notify.send(build_gen_message(gen_result, gen_elapsed))
 
     # ── 3. clear raw files ──
     print("\n── ขั้นตอน 3: clear rawFile ──")
     clear_raw_files()
+
+    total_elapsed = fmt_duration(time.time() - t_total)
+    notify.send(f"✅ Pipeline เสร็จสิ้น\n⏱ รวม: {total_elapsed}")
 
     print(f"\n✅ เสร็จสิ้น — log: {log_file}")
     print("=" * 55)
