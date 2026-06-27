@@ -132,15 +132,24 @@ def read_slip(client: anthropic.Anthropic, image_path: Path) -> dict | None:
 # ── File ops ──────────────────────────────────────────────────────────────────
 
 def safe_copy(src: Path, dest_dir: Path) -> Path:
-    """copy ไฟล์ไป dest_dir ถ้าชื่อซ้ำให้เพิ่ม suffix"""
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / src.name
-    counter = 1
-    while dest.exists():
-        dest = dest_dir / f"{src.stem}_{counter}{src.suffix}"
-        counter += 1
-    shutil.copy(src, dest)
-    return dest
+    """copy ไฟล์ไป dest_dir ถ้าชื่อซ้ำให้เพิ่ม suffix — retry ถ้าเจอ IO error"""
+    import time
+    for attempt in range(3):
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / src.name
+            counter = 1
+            while dest.exists():
+                dest = dest_dir / f"{src.stem}_{counter}{src.suffix}"
+                counter += 1
+            shutil.copy(src, dest)
+            return dest
+        except OSError as e:
+            if attempt < 2:
+                print(f"    ⚠️  IO error retry {attempt+1}/3: {e}")
+                time.sleep(3)
+            else:
+                raise
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
