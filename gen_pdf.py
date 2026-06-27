@@ -360,6 +360,9 @@ def fill_template_receipt(slips: list[dict], day_str: str, month_name: str,
     tmp = Path(tempfile.mkdtemp()) / f"receipt_{month_name}_{day_str}.docx"
     doc.save(str(tmp))
     return tmp
+
+
+def convert_to_pdf(docx_path: Path, output_dir: Path) -> Path | None:
     """แปลง docx เป็น PDF ด้วย LibreOffice"""
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
