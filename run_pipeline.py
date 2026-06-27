@@ -144,7 +144,8 @@ def main():
     total_elapsed = fmt_duration(time.time() - t_total)
     notify.send(f"✅ Pipeline เสร็จสิ้น\n⏱ รวม: {total_elapsed}")
 
-    print(f"\n✅ เสร็จสิ้น — log: {log_file}")
+    print(f"\n✅ เสร็จสิ้น {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} — รวม: {total_elapsed}")
+    print(f"   log: {log_file}")
     print("=" * 55)
 
 
