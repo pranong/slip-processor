@@ -201,7 +201,7 @@ def run() -> dict:
     def process_one(args):
         i, img = args
         try:
-            log(f"[{i:4d}/{len(local_images)}] {img.name}", end=" ... ")
+            log(f"[{i:4d}/{len(local_images)}] {img.name}")
 
             phash = get_phash(img)
             if phash:
