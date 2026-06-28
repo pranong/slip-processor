@@ -155,8 +155,8 @@ def safe_copy(src: Path, dest_dir: Path) -> Path:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def run() -> dict:
-    raw = Path(RAW_MOUNT)
-    data = Path(DATA_MOUNT)
+    import tempfile, subprocess
+    raw  = Path(RAW_MOUNT)
 
     if not raw.exists():
         print("❌ rawFile mount ไม่พบ — เช็ค mount ก่อน")
@@ -169,21 +169,32 @@ def run() -> dict:
 
     print(f"📂 พบรูปใหม่ {len(images)} ไฟล์")
 
+    # ── copy รูปจาก rawFile mount มา local ก่อน ──
+    local_raw = Path(tempfile.mkdtemp()) / "rawFile"
+    local_raw.mkdir(parents=True)
+    print("   📥 copy รูปมา local...")
+    for img in images:
+        shutil.copy(str(img), str(local_raw / img.name))
+    local_images = [f for f in sorted(local_raw.iterdir()) if f.suffix.lower() in IMAGE_EXTS]
+    print(f"   ✅ copy {len(local_images)} รูปเสร็จ")
+
+    # ── local staging dir ──
+    local_data = Path(tempfile.mkdtemp()) / "data"
+    local_data.mkdir(parents=True)
+
     client   = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     hash_db  = load_hash_db()
-    results  = {
-        "new": 0, "duplicate": 0,
-        "no_note": 0, "invalid": 0,
-        "details": []
-    }
-    lock = threading.Lock()
+    results  = {"new": 0, "duplicate": 0, "no_note": 0, "invalid": 0, "failed": 0, "details": []}
+    lock     = threading.Lock()
+
+    from utils.vendor import load_vendors, find_vendor
+    vendors = load_vendors(force_reload=True)
 
     def process_one(args):
         i, img = args
         try:
-            print(f"[{i:4d}/{len(images)}] {img.name}", end=" ... ")
+            print(f"[{i:4d}/{len(local_images)}] {img.name}", end=" ... ")
 
-            # ── เช็คซ้ำ ชั้นที่ 1 (phash เท่านั้น ยังไม่มี ref) ──
             phash = get_phash(img)
             if phash:
                 with lock:
@@ -192,54 +203,38 @@ def run() -> dict:
                     print(f"⚠️  ซ้ำ → '{img.name}' ซ้ำกับ '{dup['filename']}' (อยู่ที่ {dup['dest']})")
                     with lock:
                         results["duplicate"] += 1
-                        results["details"].append({
-                            "file": img.name,
-                            "status": "duplicate",
-                            "original": dup["filename"],
-                            "original_dest": dup["dest"],
-                        })
+                        results["details"].append({"file": img.name, "status": "duplicate", "original": dup["filename"]})
                     return
 
-            # ── อ่าน slip (Claude API) ──
             info = read_slip(client, img)
-
             if info is None:
-                # อ่านไม่ได้ / ไม่ใช่ slip โอนเงิน
-                dest = safe_copy(img, data / "unclassified" / "invalid")
-                print(f"❌ อ่านไม่ได้/ไม่ใช่ slip → {dest}")
+                safe_copy(img, local_data / "unclassified" / "invalid")
+                print(f"❌ อ่านไม่ได้")
                 with lock:
                     results["invalid"] += 1
                     results["details"].append({"file": img.name, "status": "invalid"})
                 return
 
-            # ── เช็คซ้ำ ชั้นที่ 2 (phash + ref) ──
             ref = info.get("ref")
             if phash:
                 with lock:
                     dup = find_duplicate(phash, hash_db, ref=ref)
                 if dup:
-                    print(f"⚠️  ซ้ำ (ref) → '{img.name}' ซ้ำกับ '{dup['filename']}' ref={ref}")
+                    print(f"⚠️  ซ้ำ (ref) → ref={ref}")
                     with lock:
                         results["duplicate"] += 1
-                        results["details"].append({
-                            "file": img.name,
-                            "status": "duplicate",
-                            "original": dup["filename"],
-                            "ref": ref,
-                        })
+                        results["details"].append({"file": img.name, "status": "duplicate", "ref": ref})
                     return
 
-            # ── เช็ค note ──
             note = info.get("note")
             if not note:
-                dest = safe_copy(img, data / "unclassified" / "no_note")
-                print(f"❓ ไม่มี note → {dest}")
+                safe_copy(img, local_data / "unclassified" / "no_note")
+                print(f"❓ ไม่มี note")
                 with lock:
                     results["no_note"] += 1
                     results["details"].append({"file": img.name, "status": "no_note"})
                 return
 
-            # ── แยก folder ──
             year       = info["year_ce"]
             month      = info["month"]
             day        = info["day"]
@@ -247,11 +242,10 @@ def run() -> dict:
             day_str    = f"{day:02d}"
             year_str   = str(year)
 
-            dest_dir     = data / year_str / month_name / day_str / "images"
-            metadata_dir = data / year_str / month_name / day_str / "metadata"
-            dest_img = safe_copy(img, dest_dir)
+            dest_dir     = local_data / year_str / month_name / day_str / "images"
+            metadata_dir = local_data / year_str / month_name / day_str / "metadata"
+            dest_img     = safe_copy(img, dest_dir)
 
-            # ── บันทึก slip_data JSON ใน metadata/ ──
             metadata_dir.mkdir(parents=True, exist_ok=True)
             slip_json = metadata_dir / (dest_img.stem + ".json")
             info["source_file"]   = img.name
@@ -259,13 +253,13 @@ def run() -> dict:
             info["pdf_generated"] = False
             slip_json.write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
 
-            print(f"📅 {day_str}/{month_name}/{year} ฿{info.get('amount', 0):,.0f} → {dest_dir}")
+            print(f"📅 {day_str}/{month_name}/{year} ฿{info.get('amount', 0):,.0f}")
 
             with lock:
                 if phash:
                     hash_db[phash] = {
                         "filename": img.name,
-                        "dest": str(dest_img),
+                        "dest": f"{year_str}/{month_name}/{day_str}/images/{dest_img.name}",
                         "day": day, "month": month, "year": year,
                         "ref": info.get("ref"),
                     }
@@ -281,11 +275,22 @@ def run() -> dict:
             with lock:
                 results["failed"] += 1
 
-    # ── รัน parallel 5 รูปพร้อมกัน ──
     with ThreadPoolExecutor(max_workers=5) as executor:
-        executor.map(process_one, enumerate(images, 1))
+        executor.map(process_one, enumerate(local_images, 1))
 
     save_hash_db(hash_db)
+
+    # ── rclone copy ผลลัพธ์ขึ้น Drive ทีเดียว ──
+    total_files = results["new"] + results["no_note"] + results["invalid"]
+    if total_files > 0:
+        print(f"\n   📤 upload ขึ้น Drive...")
+        subprocess.run([
+            "rclone", "copy", str(local_data),
+            "gdrive:SlipProcessor/data",
+            "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+        ], capture_output=True)
+        print(f"   ✅ upload เสร็จ")
+
     print(f"\n{'='*55}")
     print(f"✅ ใหม่: {results['new']}  ⚠️ ซ้ำ: {results['duplicate']}  ❓ ไม่มี note: {results['no_note']}  ❌ อ่านไม่ได้: {results['invalid']}")
     return results
