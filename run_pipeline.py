@@ -32,11 +32,17 @@ def setup_logging():
 
 def clear_raw_files():
     import subprocess
-    from config.config import RCLONE_REMOTE
     result = subprocess.run([
-        "rclone", "delete", f"{RCLONE_REMOTE}:SlipProcessor/rawFile",
-        "--include", "*.jpg", "--include", "*.jpeg",
-        "--include", "*.png", "--include", "*.webp",
+        "rclone", "delete", "gdrive:SlipProcessor/rawFile",
+        "--filter", "+ *.jpg",
+        "--filter", "+ *.jpeg", 
+        "--filter", "+ *.png",
+        "--filter", "+ *.webp",
+        "--filter", "+ *.JPG",
+        "--filter", "+ *.JPEG",
+        "--filter", "+ *.PNG",
+        "--filter", "+ *.WEBP",
+        "--filter", "- *",
         "--config", str(Path.home() / ".config/rclone/rclone.conf"),
     ], capture_output=True, text=True)
     if result.returncode == 0:
