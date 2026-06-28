@@ -141,6 +141,20 @@ def main():
             lines.append(f"  - {u['file']}")
         notify.send("\n".join(lines))
 
+    # ถ้าไม่มี slip ใหม่เลย หยุด
+    if sort_result.get("new", 0) == 0:
+        msg = "ℹ️ ไม่มี slip ใหม่ที่ต้อง gen PDF — หยุด pipeline"
+        log(msg)
+        notify.send(msg)
+        return
+
+    # ถ้า failed ทั้งหมด หยุด
+    if sort_result.get("failed", 0) > 0 and sort_result.get("new", 0) == 0:
+        msg = "❌ Sort ล้มเหลวทั้งหมด — หยุด pipeline"
+        log(msg)
+        notify.send(msg)
+        return
+
     # ── 2. gen PDF ──
     log("\n── ขั้นตอน 2: gen PDF ──")
     t0 = time.time()
