@@ -1,3 +1,4 @@
+from utils.logger import log
 """
 gen_pdf.py — gen PDF ใบรับรองแทนใบเสร็จรับเงิน จาก template .docx
 - อ่าน slip_data JSON ที่ sort_slips.py สร้างไว้ (ไม่ call Claude API ซ้ำ)
@@ -194,14 +195,14 @@ def fill_template(slips: list[dict], day_str: str, month_name: str,
     """เติมข้อมูลลง template, return path ของ docx ที่ fill แล้ว"""
     template = template_path if template_path else Path(TEMPLATE_PATH)
     if not template.exists():
-        print(f"    ⚠️  ไม่พบ template: {template}")
+        log(f"    ⚠️  ไม่พบ template: {template}")
         return None
 
     doc = DocxDocument(str(template))
 
     # หาตารางแรก
     if not doc.tables:
-        print("    ⚠️  ไม่พบตารางใน template")
+        log("    ⚠️  ไม่พบตารางใน template")
         return None
     table = doc.tables[0]
 
@@ -216,7 +217,7 @@ def fill_template(slips: list[dict], day_str: str, month_name: str,
             total_row_idx = idx
 
     if template_row_idx is None:
-        print("    ⚠️  ไม่พบ $date[0] ใน template")
+        log("    ⚠️  ไม่พบ $date[0] ใน template")
         return None
 
     # ── เติมข้อมูล ──
@@ -285,13 +286,13 @@ def fill_template_receipt(slips: list[dict], day_str: str, month_name: str,
     """
     template_path = Path(TEMPLATE_DIR) / "ใบสำคัญรับเงิน.docx"
     if not template_path.exists():
-        print(f"    ⚠️  ไม่พบ template: {template_path}")
+        log(f"    ⚠️  ไม่พบ template: {template_path}")
         return None
 
     doc = DocxDocument(str(template_path))
 
     if not doc.tables:
-        print("    ⚠️  ไม่พบตารางใน template ใบสำคัญรับเงิน")
+        log("    ⚠️  ไม่พบตารางใน template ใบสำคัญรับเงิน")
         return None
 
     # ── vendor info (จาก slip แรก — vendor เดียวกันทั้งวัน) ──
@@ -323,7 +324,7 @@ def fill_template_receipt(slips: list[dict], day_str: str, month_name: str,
             break
 
     if item_table is None:
-        print("    ⚠️  ไม่พบตาราง item ใน template ใบสำคัญรับเงิน")
+        log("    ⚠️  ไม่พบตาราง item ใน template ใบสำคัญรับเงิน")
         return None
 
     # หา template row
@@ -382,9 +383,9 @@ def convert_to_pdf(docx_path: Path, output_dir: Path) -> Path | None:
         pdf_path = output_dir / pdf_name
         if pdf_path.exists():
             return pdf_path
-        print(f"    ⚠️  LibreOffice error: {result.stderr[:200]}")
+        log(f"    ⚠️  LibreOffice error: {result.stderr[:200]}")
     except Exception as e:
-        print(f"    ⚠️  Convert error: {e}")
+        log(f"    ⚠️  Convert error: {e}")
     return None
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -426,7 +427,7 @@ def run() -> dict:
                     for jf in sorted(json_dir.glob("*.json")):
                         _shutil.copy(str(jf), str(local_tmp / jf.name))
                 except Exception as e:
-                    print(f"    ⚠️  copy metadata error: {e}")
+                    log(f"    ⚠️  copy metadata error: {e}")
 
                 # หา slip JSON ทั้งหมดจาก local temp
                 all_slips = []
@@ -503,11 +504,11 @@ def run() -> dict:
                     renamed_docx.unlink(missing_ok=True)
 
                     if pdf_path is None:
-                        print(f"    ❌ [{sf}] ใบรับรองฯ convert ล้มเหลว")
+                        log(f"    ❌ [{sf}] ใบรับรองฯ convert ล้มเหลว")
                         results["failed"] += 1
                         continue
 
-                    print(f"    ✅ {date_prefix}-ใบรับรองแทนใบเสร็จรับเงิน.pdf")
+                    log(f"    ✅ {date_prefix}-ใบรับรองแทนใบเสร็จรับเงิน.pdf")
 
                     # gen ใบสำคัญรับเงิน แยกตาม vendor
                     from collections import defaultdict
@@ -520,7 +521,7 @@ def run() -> dict:
                     for to_name, vendor_slips in slips_by_vendor.items():
                         vendor = find_vendor(to_name, vendors)
                         if vendor is None:
-                            print(f"    ℹ️  ไม่เจอ vendor '{to_name}' — ข้ามใบสำคัญฯ")
+                            log(f"    ℹ️  ไม่เจอ vendor '{to_name}' — ข้ามใบสำคัญฯ")
                             continue
                         for s in vendor_slips:
                             s["vendor"] = vendor
@@ -536,7 +537,7 @@ def run() -> dict:
                             receipt_pdf = convert_to_pdf(renamed_receipt, local_receipt_dir)
                             renamed_receipt.unlink(missing_ok=True)
                             if receipt_pdf:
-                                print(f"    ✅ ใบสำคัญรับเงิน/{file_name}.pdf")
+                                log(f"    ✅ ใบสำคัญรับเงิน/{file_name}.pdf")
 
                     # ── copy ทุกอย่างจาก local_docs ขึ้น mount ทีเดียว ──
                     sub_docs.mkdir(parents=True, exist_ok=True)
@@ -561,12 +562,12 @@ def run() -> dict:
                     results["monthly"][month_dir.name] = (
                         results["monthly"].get(month_dir.name, 0) + total_amt
                     )
-                    print(f"    ✅ [{sf}] {pdf_path.name} (฿{total_amt:,.0f})")
+                    log(f"    ✅ [{sf}] {pdf_path.name} (฿{total_amt:,.0f})")
                     results["new"] += 1
 
         save_summary(year_dir, summary)
 
-    print(f"\n✅ gen ใหม่: {results['new']}  ❌ ล้มเหลว: {results['failed']}")
+    log(f"\n✅ gen ใหม่: {results['new']}  ❌ ล้มเหลว: {results['failed']}")
     return results
 
 
@@ -584,12 +585,12 @@ if __name__ == "__main__":
 
     if args.regen:
         scope_type, scope_value = args.regen
-        print(f"♻️  Regen mode: {scope_type} = {scope_value}")
+        log(f"♻️  Regen mode: {scope_type} = {scope_value}")
 
         from state import load_state, save_state, reset_state
         state = load_state()
         count = reset_state(state, scope_value)
         save_state(state)
-        print(f"   Reset {count} groups — กำลัง gen...\n")
+        log(f"   Reset {count} groups — กำลัง gen...\n")
 
     run()

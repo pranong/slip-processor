@@ -1,3 +1,4 @@
+from utils.logger import log
 """
 run_pipeline.py — ตัวจัดการ pipeline ทั้งหมด
 sort_slips → notify → gen_pdf → notify → clear rawFile
@@ -46,9 +47,9 @@ def clear_raw_files():
         "--config", str(Path.home() / ".config/rclone/rclone.conf"),
     ], capture_output=True, text=True)
     if result.returncode == 0:
-        print("🗑️  ลบรูปใน rawFile เสร็จแล้ว")
+        log("🗑️  ลบรูปใน rawFile เสร็จแล้ว")
     else:
-        print(f"⚠️  ลบ rawFile error: {result.stderr[:100]}")
+        log(f"⚠️  ลบ rawFile error: {result.stderr[:100]}")
     return 0
 
 
@@ -101,9 +102,9 @@ def main():
     import time
     t_total = time.time()
 
-    print("=" * 55)
-    print(f"▶ Slip Processor — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 55)
+    log("=" * 55)
+    log(f"▶ Slip Processor — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    log("=" * 55)
 
     log_file = setup_logging()
 
@@ -112,8 +113,13 @@ def main():
 
     notify.send(f"🚀 Pipeline เริ่มแล้ว — {datetime.now().strftime('%H:%M:%S')}")
 
+    # ── รอ rawFile mount sync ──
+    import time as _time
+    log("\n── รอ rawFile sync ──")
+    _time.sleep(10)
+
     # ── 1. sort slips ──
-    print("\n── ขั้นตอน 1: sort ──")
+    log("\n── ขั้นตอน 1: sort ──")
     t0 = time.time()
     sort_result = sort_slips.run()
     sort_elapsed = fmt_duration(time.time() - t0)
@@ -136,7 +142,7 @@ def main():
         notify.send("\n".join(lines))
 
     # ── 2. gen PDF ──
-    print("\n── ขั้นตอน 2: gen PDF ──")
+    log("\n── ขั้นตอน 2: gen PDF ──")
     t0 = time.time()
     gen_result = gen_pdf.run()
     gen_elapsed = fmt_duration(time.time() - t0)
@@ -144,15 +150,15 @@ def main():
     notify.send(build_gen_message(gen_result, gen_elapsed))
 
     # ── 3. clear raw files ──
-    print("\n── ขั้นตอน 3: clear rawFile ──")
+    log("\n── ขั้นตอน 3: clear rawFile ──")
     clear_raw_files()
 
     total_elapsed = fmt_duration(time.time() - t_total)
     notify.send(f"✅ Pipeline เสร็จสิ้น\n⏱ รวม: {total_elapsed}")
 
-    print(f"\n✅ เสร็จสิ้น {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} — รวม: {total_elapsed}")
-    print(f"   log: {log_file}")
-    print("=" * 55)
+    log(f"\n✅ เสร็จสิ้น {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} — รวม: {total_elapsed}")
+    log(f"   log: {log_file}")
+    log("=" * 55)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+from utils.logger import log
 """
 telegram_bot.py — รับคำสั่งจาก Telegram แล้วรัน pipeline
 คำสั่งที่รองรับ:
@@ -30,7 +31,7 @@ def send(text: str):
             "parse_mode": "HTML",
         }, timeout=10)
     except Exception as e:
-        print(f"[send error] {e}")
+        log(f"[send error] {e}")
 
 
 def get_updates(offset: int) -> list:
@@ -164,7 +165,7 @@ def do_run(cmd: str):
     except Exception as e:
         import traceback
         send(f"❌ เกิดข้อผิดพลาด\n<code>{e}</code>")
-        print(traceback.format_exc())
+        log(traceback.format_exc())
     finally:
         global RUNNING
         with LOCK:
@@ -198,7 +199,7 @@ def do_regen(scope: str):
     except Exception as e:
         import traceback
         send(f"❌ เกิดข้อผิดพลาด\n<code>{e}</code>")
-        print(traceback.format_exc())
+        log(traceback.format_exc())
     finally:
         global RUNNING
         with LOCK:
@@ -263,7 +264,7 @@ def handle_command(text: str):
 
 def main():
     global OFFSET
-    print(f"🤖 Bot เริ่มทำงาน — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    log(f"🤖 Bot เริ่มทำงาน — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     send("🤖 <b>Slip Processor Bot พร้อมแล้ว!</b>\nพิมพ์ /help เพื่อดูคำสั่ง")
 
     while True:
@@ -278,7 +279,7 @@ def main():
                 continue
             text = msg.get("text", "")
             if text.startswith("/"):
-                print(f"[cmd] {text}")
+                log(f"[cmd] {text}")
                 handle_command(text)
         time.sleep(1)
 

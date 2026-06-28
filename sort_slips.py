@@ -1,3 +1,4 @@
+from utils.logger import log
 """
 sort_slips.py — อ่าน slip + ดึงข้อมูลทั้งหมดในรอบเดียว + แยก folder + เช็คซ้ำ
 เรียก Claude API แค่ครั้งเดียวต่อรูป (ประหยัด cost)
@@ -127,7 +128,7 @@ def read_slip(client: anthropic.Anthropic, image_path: Path) -> dict | None:
         if result and all(k in result for k in ("day", "month", "year_ce")):
             return result
     except Exception as e:
-        print(f"    ⚠️  API error: {e}")
+        log(f"    ⚠️  API error: {e}")
     return None
 
 # ── File ops ──────────────────────────────────────────────────────────────────
@@ -147,7 +148,7 @@ def safe_copy(src: Path, dest_dir: Path) -> Path:
             return dest
         except OSError as e:
             if attempt < 2:
-                print(f"    ⚠️  IO error retry {attempt+1}/3: {e}")
+                log(f"    ⚠️  IO error retry {attempt+1}/3: {e}")
                 time.sleep(3)
             else:
                 raise
@@ -159,24 +160,31 @@ def run() -> dict:
     raw  = Path(RAW_MOUNT)
 
     if not raw.exists():
-        print("❌ rawFile mount ไม่พบ — เช็ค mount ก่อน")
+        log("❌ rawFile mount ไม่พบ — เช็ค mount ก่อน")
         return {"new": 0, "duplicate": 0, "no_note": 0, "invalid": 0}
 
     images = [f for f in sorted(raw.iterdir()) if f.suffix.lower() in IMAGE_EXTS]
     if not images:
-        print("ℹ️  ไม่มีรูปใหม่")
+        log("ℹ️  ไม่มีรูปใหม่")
         return {"new": 0, "duplicate": 0, "no_note": 0, "invalid": 0}
 
-    print(f"📂 พบรูปใหม่ {len(images)} ไฟล์")
+    log(f"📂 พบรูปใหม่ {len(images)} ไฟล์")
 
-    # ── copy รูปจาก rawFile mount มา local ก่อน ──
+    # ── copy รูปจาก rawFile ลงมา local ด้วย rclone (เร็วกว่า shutil.copy จาก mount) ──
     local_raw = Path(tempfile.mkdtemp()) / "rawFile"
     local_raw.mkdir(parents=True)
-    print("   📥 copy รูปมา local...")
-    for img in images:
-        shutil.copy(str(img), str(local_raw / img.name))
+    log("   📥 copy รูปมา local...")
+    import subprocess
+    subprocess.run([
+        "rclone", "copy", "gdrive:SlipProcessor/rawFile", str(local_raw),
+        "--include", "*.jpg", "--include", "*.jpeg",
+        "--include", "*.png", "--include", "*.webp",
+        "--include", "*.JPG", "--include", "*.JPEG",
+        "--include", "*.PNG", "--include", "*.WEBP",
+        "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+    ])
     local_images = [f for f in sorted(local_raw.iterdir()) if f.suffix.lower() in IMAGE_EXTS]
-    print(f"   ✅ copy {len(local_images)} รูปเสร็จ")
+    log(f"   ✅ copy {len(local_images)} รูปเสร็จ")
 
     # ── local staging dir ──
     local_data = Path(tempfile.mkdtemp()) / "data"
@@ -193,14 +201,14 @@ def run() -> dict:
     def process_one(args):
         i, img = args
         try:
-            print(f"[{i:4d}/{len(local_images)}] {img.name}", end=" ... ")
+            log(f"[{i:4d}/{len(local_images)}] {img.name}", end=" ... ")
 
             phash = get_phash(img)
             if phash:
                 with lock:
                     dup = find_duplicate(phash, hash_db, ref=None)
                 if dup:
-                    print(f"⚠️  ซ้ำ → '{img.name}' ซ้ำกับ '{dup['filename']}' (อยู่ที่ {dup['dest']})")
+                    log(f"⚠️  ซ้ำ → '{img.name}' ซ้ำกับ '{dup['filename']}' (อยู่ที่ {dup['dest']})")
                     with lock:
                         results["duplicate"] += 1
                         results["details"].append({"file": img.name, "status": "duplicate", "original": dup["filename"]})
@@ -209,7 +217,7 @@ def run() -> dict:
             info = read_slip(client, img)
             if info is None:
                 safe_copy(img, local_data / "unclassified" / "invalid")
-                print(f"❌ อ่านไม่ได้")
+                log(f"❌ อ่านไม่ได้")
                 with lock:
                     results["invalid"] += 1
                     results["details"].append({"file": img.name, "status": "invalid"})
@@ -220,7 +228,7 @@ def run() -> dict:
                 with lock:
                     dup = find_duplicate(phash, hash_db, ref=ref)
                 if dup:
-                    print(f"⚠️  ซ้ำ (ref) → ref={ref}")
+                    log(f"⚠️  ซ้ำ (ref) → ref={ref}")
                     with lock:
                         results["duplicate"] += 1
                         results["details"].append({"file": img.name, "status": "duplicate", "ref": ref})
@@ -229,7 +237,7 @@ def run() -> dict:
             note = info.get("note")
             if not note:
                 safe_copy(img, local_data / "unclassified" / "no_note")
-                print(f"❓ ไม่มี note")
+                log(f"❓ ไม่มี note")
                 with lock:
                     results["no_note"] += 1
                     results["details"].append({"file": img.name, "status": "no_note"})
@@ -253,7 +261,7 @@ def run() -> dict:
             info["pdf_generated"] = False
             slip_json.write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
 
-            print(f"📅 {day_str}/{month_name}/{year} ฿{info.get('amount', 0):,.0f}")
+            log(f"📅 {day_str}/{month_name}/{year} ฿{info.get('amount', 0):,.0f}")
 
             with lock:
                 if phash:
@@ -270,7 +278,7 @@ def run() -> dict:
                     "amount": info.get("amount"),
                 })
         except Exception as e:
-            print(f"❌ error: {e}")
+            log(f"❌ error: {e}")
             import traceback; traceback.print_exc()
             with lock:
                 results["failed"] += 1
@@ -283,16 +291,16 @@ def run() -> dict:
     # ── rclone copy ผลลัพธ์ขึ้น Drive ทีเดียว ──
     total_files = results["new"] + results["no_note"] + results["invalid"]
     if total_files > 0:
-        print(f"\n   📤 upload ขึ้น Drive...")
+        log(f"\n   📤 upload ขึ้น Drive...")
         subprocess.run([
             "rclone", "copy", str(local_data),
             "gdrive:SlipProcessor/data",
             "--config", str(Path.home() / ".config/rclone/rclone.conf"),
         ], capture_output=True)
-        print(f"   ✅ upload เสร็จ")
+        log(f"   ✅ upload เสร็จ")
 
-    print(f"\n{'='*55}")
-    print(f"✅ ใหม่: {results['new']}  ⚠️ ซ้ำ: {results['duplicate']}  ❓ ไม่มี note: {results['no_note']}  ❌ อ่านไม่ได้: {results['invalid']}")
+    log(f"\n{'='*55}")
+    log(f"✅ ใหม่: {results['new']}  ⚠️ ซ้ำ: {results['duplicate']}  ❓ ไม่มี note: {results['no_note']}  ❌ อ่านไม่ได้: {results['invalid']}")
     return results
 
 
