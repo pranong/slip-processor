@@ -418,12 +418,22 @@ def run() -> dict:
                 if not images_dir.exists():
                     continue
 
-                # หา slip JSON ทั้งหมดจาก metadata/
-                all_slips = []
+                # ── copy metadata มา local temp ก่อนอ่าน (เร็วกว่าอ่านจาก mount ทีละไฟล์) ──
+                import tempfile, shutil as _shutil
                 json_dir  = metadata_dir if metadata_dir.exists() else images_dir
-                for jf in sorted(json_dir.glob("*.json")):
+                local_tmp = Path(tempfile.mkdtemp())
+                try:
+                    for jf in sorted(json_dir.glob("*.json")):
+                        _shutil.copy(str(jf), str(local_tmp / jf.name))
+                except Exception as e:
+                    print(f"    ⚠️  copy metadata error: {e}")
+
+                # หา slip JSON ทั้งหมดจาก local temp
+                all_slips = []
+                for jf in sorted(local_tmp.glob("*.json")):
                     data = json.loads(jf.read_text(encoding="utf-8"))
-                    data["_json_path"] = str(jf)
+                    data["_json_path"] = str(json_dir / jf.name)  # path จริงบน mount
+                    data["_local_json_path"] = str(jf)             # path local
                     all_slips.append(data)
 
                 if not all_slips:
@@ -443,6 +453,8 @@ def run() -> dict:
                     group_slips = group["slips"]
                     tmpl_path   = group["template"]
                     sub_docs    = day_dir / "docs" / sf
+                    # local temp สำหรับ gen PDF ก่อน copy ขึ้น mount
+                    local_docs  = local_tmp / "docs" / sf
 
                     # เช็ค state local ว่า group นี้มี slip ใหม่ไหม
                     new_slips = [
@@ -457,8 +469,7 @@ def run() -> dict:
                     print(f"  📄 {year_dir.name}/{month_dir.name}/{day_dir.name}/{sf} "
                           f"— slip ใหม่ {len(new_slips)} ใบ (รวม {len(group_slips)} ใบ)")
 
-                    # ลบ PDF เก่าผ่าน rclone (เร็วกว่า unlink บน mount)
-                    sub_docs.mkdir(parents=True, exist_ok=True)
+                    # ลบ PDF เก่าผ่าน rclone
                     import subprocess as _sp
                     _sp.run([
                         "rclone", "delete",
@@ -467,7 +478,10 @@ def run() -> dict:
                         "--config", str(Path.home() / ".config/rclone/rclone.conf"),
                     ], capture_output=True)
 
-                    # gen PDF ใบรับรองแทนใบเสร็จรับเงิน
+                    # gen PDF ใน local temp
+                    local_docs.mkdir(parents=True, exist_ok=True)
+
+                    # gen ใบรับรองแทนใบเสร็จรับเงิน
                     docx_path = fill_template(
                         group_slips,
                         day_dir.name,
@@ -482,10 +496,10 @@ def run() -> dict:
 
                     date_prefix  = f"{year_dir.name}{MONTH_MAP_NUM.get(month_dir.name, '00')}{day_dir.name}"
                     final_name   = f"{date_prefix}-ใบรับรองแทนใบเสร็จรับเงิน"
-                    renamed_docx = sub_docs / f"{final_name}.docx"
+                    renamed_docx = local_docs / f"{final_name}.docx"
                     shutil.move(str(docx_path), str(renamed_docx))
 
-                    pdf_path = convert_to_pdf(renamed_docx, sub_docs)
+                    pdf_path = convert_to_pdf(renamed_docx, local_docs)
                     renamed_docx.unlink(missing_ok=True)
 
                     if pdf_path is None:
@@ -493,49 +507,44 @@ def run() -> dict:
                         results["failed"] += 1
                         continue
 
-                    print(f"    ✅ ใบรับรองแทนใบเสร็จรับเงิน.pdf")
+                    print(f"    ✅ {date_prefix}-ใบรับรองแทนใบเสร็จรับเงิน.pdf")
 
-                    # ── gen ใบสำคัญรับเงิน แยกตาม vendor ──
-                    receipt_dir = sub_docs / "ใบสำคัญรับเงิน"
-
-                    # แยก slip ตาม to_name แล้ว lookup vendor แต่ละคน
+                    # gen ใบสำคัญรับเงิน แยกตาม vendor
                     from collections import defaultdict
                     slips_by_vendor: dict[str, list] = defaultdict(list)
                     for s in group_slips:
                         to_name = s.get("to_name") or s.get("to_account", "")
                         slips_by_vendor[to_name].append(s)
 
+                    local_receipt_dir = local_docs / "ใบสำคัญรับเงิน"
                     for to_name, vendor_slips in slips_by_vendor.items():
                         vendor = find_vendor(to_name, vendors)
                         if vendor is None:
                             print(f"    ℹ️  ไม่เจอ vendor '{to_name}' — ข้ามใบสำคัญฯ")
                             continue
-
-                        # เพิ่ม vendor info เข้าทุก slip ของคนนี้
                         for s in vendor_slips:
                             s["vendor"] = vendor
-
-                        # ชื่อไฟล์ เช่น 20260624-นาย ประสิทธิ์.pdf
-                        date_prefix = f"{year_dir.name}{MONTH_MAP_NUM.get(month_dir.name, '00')}{day_dir.name}"
-                        safe_name   = to_name.replace("/", "-").replace("\\", "-")
-                        file_name   = f"{date_prefix}-{safe_name}"
-
-                        receipt_dir.mkdir(parents=True, exist_ok=True)
+                        safe_name = to_name.replace("/", "-").replace("\\", "-")
+                        file_name = f"{date_prefix}-{safe_name}"
+                        local_receipt_dir.mkdir(parents=True, exist_ok=True)
                         receipt_docx = fill_template_receipt(
-                            vendor_slips,
-                            day_dir.name,
-                            month_dir.name,
-                            year_dir.name,
+                            vendor_slips, day_dir.name, month_dir.name, year_dir.name,
                         )
                         if receipt_docx:
-                            renamed_receipt = receipt_dir / f"{file_name}.docx"
+                            renamed_receipt = local_receipt_dir / f"{file_name}.docx"
                             shutil.move(str(receipt_docx), str(renamed_receipt))
-                            receipt_pdf = convert_to_pdf(renamed_receipt, receipt_dir)
+                            receipt_pdf = convert_to_pdf(renamed_receipt, local_receipt_dir)
                             renamed_receipt.unlink(missing_ok=True)
                             if receipt_pdf:
                                 print(f"    ✅ ใบสำคัญรับเงิน/{file_name}.pdf")
-                            else:
-                                print(f"    ⚠️  {file_name} convert ล้มเหลว")
+
+                    # ── copy ทุกอย่างจาก local_docs ขึ้น mount ทีเดียว ──
+                    sub_docs.mkdir(parents=True, exist_ok=True)
+                    _sp.run([
+                        "rclone", "copy", str(local_docs),
+                        f"gdrive:SlipProcessor/data/{year_dir.name}/{month_dir.name}/{day_dir.name}/docs/{sf}",
+                        "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+                    ], capture_output=True)
 
                     # บันทึก state local (เร็ว ไม่ต้องแตะ Drive)
                     mark_generated(state, year_dir.name, month_dir.name,
