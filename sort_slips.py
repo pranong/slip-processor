@@ -288,19 +288,10 @@ def run() -> dict:
 
     save_hash_db(hash_db)
 
-    # ── rclone copy ผลลัพธ์ขึ้น Drive ทีเดียว ──
-    total_files = results["new"] + results["no_note"] + results["invalid"]
-    if total_files > 0:
-        log(f"\n   📤 upload ขึ้น Drive...")
-        subprocess.run([
-            "rclone", "copy", str(local_data),
-            "gdrive:SlipProcessor/data",
-            "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-        ], capture_output=True)
-        log(f"   ✅ upload เสร็จ")
-
+    # ── rclone upload ย้ายไปทำที่ run_pipeline แทน ──
     log(f"\n{'='*55}")
     log(f"✅ ใหม่: {results['new']}  ⚠️ ซ้ำ: {results['duplicate']}  ❓ ไม่มี note: {results['no_note']}  ❌ อ่านไม่ได้: {results['invalid']}")
+    results["_local_data"] = str(local_data)  # ส่ง path กลับไปให้ run_pipeline sync
     return results
 
 

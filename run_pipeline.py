@@ -123,10 +123,10 @@ def main():
     t0 = time.time()
     sort_result = sort_slips.run()
     sort_elapsed = fmt_duration(time.time() - t0)
+    local_data = sort_result.get("_local_data")
 
     notify.send(build_sort_message(sort_result, sort_elapsed))
 
-    # แจ้ง unclassified
     no_note = [d for d in sort_result.get("details", []) if d.get("status") == "no_note"]
     if no_note:
         lines = [f"❓ ไม่มี note {len(no_note)} ไฟล์ → unclassified/no_note/"]
@@ -141,16 +141,8 @@ def main():
             lines.append(f"  - {u['file']}")
         notify.send("\n".join(lines))
 
-    # ถ้าไม่มี slip ใหม่เลย หยุด
     if sort_result.get("new", 0) == 0:
         msg = "ℹ️ ไม่มี slip ใหม่ที่ต้อง gen PDF — หยุด pipeline"
-        log(msg)
-        notify.send(msg)
-        return
-
-    # ถ้า failed ทั้งหมด หยุด
-    if sort_result.get("failed", 0) > 0 and sort_result.get("new", 0) == 0:
-        msg = "❌ Sort ล้มเหลวทั้งหมด — หยุด pipeline"
         log(msg)
         notify.send(msg)
         return
@@ -158,19 +150,51 @@ def main():
     # ── 2. gen PDF ──
     log("\n── ขั้นตอน 2: gen PDF ──")
     t0 = time.time()
-    gen_result = gen_pdf.run()
+    gen_result = gen_pdf.run(local_data_path=local_data)
     gen_elapsed = fmt_duration(time.time() - t0)
+    local_output = gen_result.get("_local_output")
 
     notify.send(build_gen_message(gen_result, gen_elapsed))
 
-    # ── 3. clear raw files ──
+    process_elapsed = fmt_duration(time.time() - t_total)
+    log(f"\n── Process เสร็จ ({process_elapsed}) — เริ่ม Sync ──")
+    notify.send(f"⚙️ Process เสร็จใน {process_elapsed}\n🔄 กำลัง sync ขึ้น Drive...")
+
+    # ── 3. Sync ขึ้น Drive ทีเดียว ──
+    t_sync = time.time()
+    import subprocess
+
+    # 3a. upload metadata + images จาก sort
+    if local_data:
+        log("\n── Sync data ──")
+        subprocess.run([
+            "rclone", "copy", local_data,
+            "gdrive:SlipProcessor/data",
+            "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+        ], capture_output=True)
+        log("   ✅ data synced")
+
+    # 3b. upload PDFs จาก gen
+    if local_output:
+        log("\n── Sync PDFs ──")
+        subprocess.run([
+            "rclone", "copy", local_output,
+            "gdrive:SlipProcessor/data",
+            "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+        ], capture_output=True)
+        log("   ✅ PDFs synced")
+
+    # 3c. clear rawFile
     log("\n── ขั้นตอน 3: clear rawFile ──")
     clear_raw_files()
 
+    sync_elapsed = fmt_duration(time.time() - t_sync)
+
     total_elapsed = fmt_duration(time.time() - t_total)
-    notify.send(f"✅ Pipeline เสร็จสิ้น\n⏱ รวม: {total_elapsed}")
+    notify.send(f"✅ Pipeline เสร็จสิ้น\n⏱ Process: {process_elapsed}\n🔄 Sync: {sync_elapsed}\n⏱ รวม: {total_elapsed}")
 
     log(f"\n✅ เสร็จสิ้น {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} — รวม: {total_elapsed}")
+    log(f"   Process: {process_elapsed} | Sync: {sync_elapsed}")
     log(f"   log: {log_file}")
     log("=" * 55)
 

@@ -390,13 +390,22 @@ def convert_to_pdf(docx_path: Path, output_dir: Path) -> Path | None:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def run() -> dict:
+def run(local_data_path: str | None = None) -> dict:
     data_root = Path(DATA_MOUNT)
     results   = {"new": 0, "skip": 0, "failed": 0, "monthly": {}}
     state     = load_state()
 
     # โหลด vendor list ครั้งเดียว
     vendors = load_vendors(force_reload=True)
+
+    # ── local output dir สำหรับ PDF ทั้งหมด ──
+    import tempfile
+    local_output = Path(tempfile.mkdtemp()) / "output"
+    local_output.mkdir(parents=True)
+
+    # ถ้า sort ส่ง local_data_path มา ให้อ่านจากนั้น (เร็ว) แทนจาก mount
+    if local_data_path:
+        data_root = Path(local_data_path)
 
     # วน loop ปี/เดือน/วัน
     for year_dir in sorted(data_root.iterdir()):
@@ -453,11 +462,8 @@ def run() -> dict:
                 for sf, group in groups.items():
                     group_slips = group["slips"]
                     tmpl_path   = group["template"]
-                    sub_docs    = day_dir / "docs" / sf
-                    # local temp สำหรับ gen PDF ก่อน copy ขึ้น mount
-                    local_docs  = local_tmp / "docs" / sf
+                    local_docs  = local_output / year_dir.name / month_dir.name / day_dir.name / sf
 
-                    # เช็ค state local ว่า group นี้มี slip ใหม่ไหม
                     new_slips = [
                         s for s in group_slips
                         if not is_generated(state, year_dir.name, month_dir.name,
@@ -467,28 +473,14 @@ def run() -> dict:
                     if not new_slips:
                         continue
 
-                    print(f"  📄 {year_dir.name}/{month_dir.name}/{day_dir.name}/{sf} "
-                          f"— slip ใหม่ {len(new_slips)} ใบ (รวม {len(group_slips)} ใบ)")
+                    log(f"  📄 {year_dir.name}/{month_dir.name}/{day_dir.name}/{sf} "
+                        f"— slip ใหม่ {len(new_slips)} ใบ (รวม {len(group_slips)} ใบ)")
 
-                    # ลบ PDF เก่าผ่าน rclone
-                    import subprocess as _sp
-                    _sp.run([
-                        "rclone", "delete",
-                        f"gdrive:SlipProcessor/data/{year_dir.name}/{month_dir.name}/{day_dir.name}/docs/{sf}",
-                        "--include", "*.pdf",
-                        "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-                    ], capture_output=True)
-
-                    # gen PDF ใน local temp
                     local_docs.mkdir(parents=True, exist_ok=True)
 
-                    # gen ใบรับรองแทนใบเสร็จรับเงิน
                     docx_path = fill_template(
-                        group_slips,
-                        day_dir.name,
-                        month_dir.name,
-                        year_dir.name,
-                        template_path=tmpl_path,
+                        group_slips, day_dir.name, month_dir.name,
+                        year_dir.name, template_path=tmpl_path,
                     )
 
                     if docx_path is None:
@@ -499,7 +491,6 @@ def run() -> dict:
                     final_name   = f"{date_prefix}-ใบรับรองแทนใบเสร็จรับเงิน"
                     renamed_docx = local_docs / f"{final_name}.docx"
                     shutil.move(str(docx_path), str(renamed_docx))
-
                     pdf_path = convert_to_pdf(renamed_docx, local_docs)
                     renamed_docx.unlink(missing_ok=True)
 
@@ -510,7 +501,6 @@ def run() -> dict:
 
                     log(f"    ✅ {date_prefix}-ใบรับรองแทนใบเสร็จรับเงิน.pdf")
 
-                    # gen ใบสำคัญรับเงิน แยกตาม vendor
                     from collections import defaultdict
                     slips_by_vendor: dict[str, list] = defaultdict(list)
                     for s in group_slips:
@@ -539,20 +529,10 @@ def run() -> dict:
                             if receipt_pdf:
                                 log(f"    ✅ ใบสำคัญรับเงิน/{file_name}.pdf")
 
-                    # ── copy ทุกอย่างจาก local_docs ขึ้น mount ทีเดียว ──
-                    sub_docs.mkdir(parents=True, exist_ok=True)
-                    _sp.run([
-                        "rclone", "copy", str(local_docs),
-                        f"gdrive:SlipProcessor/data/{year_dir.name}/{month_dir.name}/{day_dir.name}/docs/{sf}",
-                        "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-                    ], capture_output=True)
-
-                    # บันทึก state local (เร็ว ไม่ต้องแตะ Drive)
                     mark_generated(state, year_dir.name, month_dir.name,
                                    day_dir.name, sf, group_slips, str(pdf_path))
                     save_state(state)
 
-                    # merge summary
                     new_slip_paths = {s["_json_path"] for s in new_slips}
                     group_new = [s for s in group_slips if s["_json_path"] in new_slip_paths]
                     merge_to_summary(summary, month_dir.name, day_dir.name,
@@ -568,6 +548,7 @@ def run() -> dict:
         save_summary(year_dir, summary)
 
     log(f"\n✅ gen ใหม่: {results['new']}  ❌ ล้มเหลว: {results['failed']}")
+    results["_local_output"] = str(local_output)
     return results
 
 
