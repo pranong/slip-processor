@@ -206,17 +206,21 @@ def run() -> dict:
 
             # ── เช็ค phash = 0 ก่อน (รูปเดิม 100%) ไม่ต้อง call API ──
             if phash:
+                found_dup = None
                 with lock:
                     for stored_str, record in hash_db.items():
                         if (imagehash.hex_to_hash(phash) - imagehash.hex_to_hash(stored_str)) == 0:
-                            log(f"⚠️  ซ้ำ (รูปเดิม) → '{img.name}' ซ้ำกับ '{record['filename']}'")
-                            with lock:
-                                results["duplicate"] += 1
-                                results["details"].append({
-                                    "file": img.name, "status": "duplicate",
-                                    "original": record["filename"],
-                                })
-                            return
+                            found_dup = record
+                            break
+                if found_dup:
+                    log(f"⚠️  ซ้ำ (รูปเดิม) → '{img.name}' ซ้ำกับ '{found_dup['filename']}'")
+                    with lock:
+                        results["duplicate"] += 1
+                        results["details"].append({
+                            "file": img.name, "status": "duplicate",
+                            "original": found_dup["filename"],
+                        })
+                    return
 
             # ── อ่าน slip (Claude API) — ต้องได้ ref ก่อนเช็คซ้ำ ──
             info = read_slip(client, img)
