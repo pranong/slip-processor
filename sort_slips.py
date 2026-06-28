@@ -228,7 +228,7 @@ def run() -> dict:
                 with lock:
                     dup = find_duplicate(phash, hash_db, ref=ref)
                 if dup:
-                    log(f"⚠️  ซ้ำ (ref) → ref={ref}")
+                    log(f"⚠️  ซ้ำ (ref) → '{img.name}' ซ้ำกับ '{dup['filename']}' ref={ref}")
                     with lock:
                         results["duplicate"] += 1
                         results["details"].append({"file": img.name, "status": "duplicate", "ref": ref})
