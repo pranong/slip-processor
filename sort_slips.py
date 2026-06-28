@@ -68,25 +68,25 @@ def get_phash(path: Path) -> str | None:
         return None
 
 
-PHASH_EXACT     = 3   # ≤3 = ซ้ำแน่นอน ไม่ต้องเช็ค ref
-PHASH_UNCERTAIN = 8   # 4-8 = ไม่แน่ใจ ต้องเช็ค ref ด้วย
+PHASH_UNCERTAIN = 8   # ≤8 → เช็ค ref เสมอ ไม่มี exact zone
 
 
 def find_duplicate(phash_str: str, db: dict, ref: str | None = None) -> dict | None:
     """
-    เช็คซ้ำ 2 ชั้น:
-    - phash ≤ 3  → ซ้ำแน่นอน
-    - phash 4-8  → เช็ค ref ด้วย ถ้า ref ตรง = ซ้ำ
-    - phash > 8  → ไม่ซ้ำ
+    เช็คซ้ำ — ถ้า phash ≤ 8 ต้องเช็ค ref ด้วยเสมอ
+    ref ต่างกัน = ไม่ซ้ำ แม้ phash จะใกล้กันมาก
     """
     current = imagehash.hex_to_hash(phash_str)
     for stored_str, record in db.items():
         diff = current - imagehash.hex_to_hash(stored_str)
-        if diff <= PHASH_EXACT:
-            return record  # ซ้ำแน่นอน
-        if diff <= PHASH_UNCERTAIN and ref and record.get("ref"):
-            if ref == record["ref"]:
-                return record  # ref ตรง = ซ้ำ
+        if diff <= PHASH_UNCERTAIN:
+            # ถ้ามี ref ให้เช็คด้วย — ref ต่างกัน = ไม่ซ้ำ
+            if ref and record.get("ref"):
+                if ref == record["ref"]:
+                    return record
+            elif diff == 0:
+                # phash เหมือนกันทุก bit และไม่มี ref = ซ้ำแน่นอน
+                return record
     return None
 
 # ── Claude API ────────────────────────────────────────────────────────────────
@@ -204,16 +204,8 @@ def run() -> dict:
             log(f"[{i:4d}/{len(local_images)}] {img.name}")
 
             phash = get_phash(img)
-            if phash:
-                with lock:
-                    dup = find_duplicate(phash, hash_db, ref=None)
-                if dup:
-                    log(f"⚠️  ซ้ำ → '{img.name}' ซ้ำกับ '{dup['filename']}' (อยู่ที่ {dup['dest']})")
-                    with lock:
-                        results["duplicate"] += 1
-                        results["details"].append({"file": img.name, "status": "duplicate", "original": dup["filename"]})
-                    return
 
+            # ── อ่าน slip (Claude API) — ต้องได้ ref ก่อนเช็คซ้ำ ──
             info = read_slip(client, img)
             if info is None:
                 safe_copy(img, local_data / "unclassified" / "invalid")
@@ -223,15 +215,19 @@ def run() -> dict:
                     results["details"].append({"file": img.name, "status": "invalid"})
                 return
 
+            # ── เช็คซ้ำ (phash + ref) ──
             ref = info.get("ref")
             if phash:
                 with lock:
                     dup = find_duplicate(phash, hash_db, ref=ref)
                 if dup:
-                    log(f"⚠️  ซ้ำ (ref) → '{img.name}' ซ้ำกับ '{dup['filename']}' ref={ref}")
+                    log(f"⚠️  ซ้ำ → '{img.name}' ซ้ำกับ '{dup['filename']}' ref={ref}")
                     with lock:
                         results["duplicate"] += 1
-                        results["details"].append({"file": img.name, "status": "duplicate", "ref": ref})
+                        results["details"].append({
+                            "file": img.name, "status": "duplicate",
+                            "original": dup["filename"], "ref": ref,
+                        })
                     return
 
             note = info.get("note")
