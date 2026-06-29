@@ -545,6 +545,26 @@ def run(local_data_path: str | None = None) -> dict:
                     log(f"    ✅ [{sf}] {pdf_path.name} (฿{total_amt:,.0f})")
                     results["new"] += 1
 
+                    # ── บันทึก transactions ลง Google Sheets ──
+                    try:
+                        from utils.transactions import append_transactions
+                        # สร้าง receipt_paths map
+                        receipt_paths = {}
+                        if local_receipt_dir.exists():
+                            for rf in local_receipt_dir.glob("*.pdf"):
+                                # ชื่อไฟล์ เช่น 20260624-นาย วิชา.pdf → นาย วิชา
+                                name_part = rf.stem[9:]  # ตัด YYYYMMDD- ออก
+                                receipt_paths[name_part] = str(rf)
+
+                        append_transactions(
+                            slips=group_new,
+                            category=sf,
+                            cert_path=str(pdf_path),
+                            receipt_paths=receipt_paths,
+                        )
+                    except Exception as e:
+                        log(f"    ⚠️  บันทึก transactions ไม่ได้: {e}")
+
         save_summary(year_dir, summary)
 
     log(f"\n✅ gen ใหม่: {results['new']}  ❌ ล้มเหลว: {results['failed']}")
