@@ -14,7 +14,6 @@ echo "   - data ทั้งหมดบน Google Drive"
 echo "   - processed_hashes.json"
 echo "   - generated_log.json"
 echo "   - log files ทั้งหมด"
-echo "   - ข้อมูลทั้งหมดใน Transactions Sheet"
 echo ""
 read -p "แน่ใจไหม? (y/N): " confirm
 
@@ -43,14 +42,6 @@ rm -f "$CODE/data/generated_log.json"
 rm -f "$CODE/generated_log.json"
 rm -f "$CODE/data/logs/"*.log
 echo "✅ local state cleared"
-
-echo ""
-echo "── ลบข้อมูลใน Transactions Sheet ──"
-cd "$CODE" && python3 -c "
-from utils.transactions import clear_transactions
-clear_transactions()
-"
-echo "✅ Transactions Sheet cleared"
 
 echo ""
 echo "========================================"

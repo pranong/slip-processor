@@ -131,8 +131,18 @@ def append_transactions(slips: list[dict], category: str,
         ws = sh.worksheet(TRANSACTIONS_SHEET_NAME)
         ensure_header(ws)
     except Exception as e:
-        print(f"    ❌ เปิด Transactions Sheet ไม่ได้: {e}")
-        return
+        # retry 1 ครั้งกรณี Google API ชั่วคราวล่ม (503)
+        import time
+        print(f"    ⚠️  เปิด Sheet ไม่สำเร็จ ({e}) — retry ใน 5 วิ...")
+        time.sleep(5)
+        try:
+            gc, drive = _get_clients()
+            sh = gc.open_by_key(TRANSACTIONS_SHEET_ID)
+            ws = sh.worksheet(TRANSACTIONS_SHEET_NAME)
+            ensure_header(ws)
+        except Exception as e2:
+            print(f"    ❌ เปิด Transactions Sheet ไม่ได้ (retry แล้ว): {e2}")
+            return
 
     cert_url_raw = _get_drive_link_by_name(drive, cert_filename) if cert_filename else ""
     cert_url = f'=HYPERLINK("{cert_url_raw}","{cert_filename}")' if cert_url_raw else ""
