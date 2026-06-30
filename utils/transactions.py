@@ -96,7 +96,8 @@ def append_transactions(slips: list[dict], category: str,
         print(f"    ❌ เปิด Transactions Sheet ไม่ได้: {e}")
         return
 
-    cert_url = _get_drive_link_by_name(drive, cert_filename) if cert_filename else ""
+    cert_url_raw = _get_drive_link_by_name(drive, cert_filename) if cert_filename else ""
+    cert_url = f'=HYPERLINK("{cert_url_raw}","{cert_filename}")' if cert_url_raw else ""
 
     rows = []
     for slip in slips:
@@ -112,13 +113,18 @@ def append_transactions(slips: list[dict], category: str,
         amount      = slip.get("amount", 0)
 
         img_file = slip.get("dest_file") or slip.get("source_file", "")
-        img_url  = _get_drive_link_by_name(drive, img_file) if img_file else ""
+        img_url_raw  = _get_drive_link_by_name(drive, img_file) if img_file else ""
+        img_url  = f'=HYPERLINK("{img_url_raw}","{img_file}")' if img_url_raw else ""
 
-        receipt_url = ""
+        receipt_url_raw = ""
         if to_name in receipt_filenames:
-            receipt_url = _get_drive_link_by_name(drive, receipt_filenames[to_name])
+            receipt_url_raw = _get_drive_link_by_name(drive, receipt_filenames[to_name])
+        receipt_url = (
+            f'=HYPERLINK("{receipt_url_raw}","{receipt_filenames.get(to_name, "")}")'
+            if receipt_url_raw else ""
+        )
 
-        has_receipt = "TRUE" if receipt_url else "FALSE"
+        has_receipt = "TRUE" if receipt_url_raw else "FALSE"
 
         rows.append([
             date_str, category, vendor_name,
