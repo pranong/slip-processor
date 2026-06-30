@@ -6,7 +6,6 @@ utils/transactions.py — บันทึก transaction ลง Google Sheets
 import gspread
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
-from pathlib import Path
 from config.config import (
     GSHEET_CREDENTIALS, TRANSACTIONS_SHEET_ID, TRANSACTIONS_SHEET_NAME
 )
@@ -36,17 +35,50 @@ def ensure_header(ws):
         first_row = ws.row_values(1)
         if first_row != HEADERS:
             ws.insert_row(HEADERS, 1)
-            # format header bold
-            ws.format("A1:K1", {"textFormat": {"bold": True}})
+            ws.format("A1:I1", {"textFormat": {"bold": True}})
     except Exception:
         ws.insert_row(HEADERS, 1)
+
+
+def clear_transactions():
+    """ลบข้อมูลทั้งหมดใน Transactions Sheet (เก็บ header ไว้)"""
+    try:
+        gc, drive = _get_clients()
+        sh = gc.open_by_key(TRANSACTIONS_SHEET_ID)
+        ws = sh.worksheet(TRANSACTIONS_SHEET_NAME)
+        ws.clear()
+        ensure_header(ws)
+        print("✅ Clear Transactions Sheet เสร็จแล้ว")
+    except Exception as e:
+        print(f"❌ Clear Transactions Sheet ไม่ได้: {e}")
+
+
+def _get_drive_link_by_name(drive_client, filename: str) -> str:
+    """ค้นหาไฟล์ใน Drive จากชื่อไฟล์ตรงๆ"""
+    if not filename:
+        return ""
+    try:
+        result = drive_client.files().list(
+            q=f"name='{filename}' and trashed=false",
+            fields="files(id, name, webViewLink)",
+        ).execute()
+        files = result.get("files", [])
+        if files:
+            url = files[0].get("webViewLink", "")
+            print(f"      🔗 พบไฟล์ '{filename}' → {url}")
+            return url
+        else:
+            print(f"      ❌ ไม่พบไฟล์ '{filename}' บน Drive")
+    except Exception as e:
+        print(f"      ⚠️  Drive link error ({filename}): {e}")
+    return ""
 
 
 def append_transactions(slips: list[dict], category: str,
                         cert_filename: str = "", receipt_filenames: dict[str, str] = None):
     """
     เพิ่ม transaction ลง Google Sheets — เรียกหลัง sync ขึ้น Drive เสร็จแล้วเท่านั้น
-    
+
     slips: list ของ slip dict จาก metadata
     category: บุคคล / uan / ceramic
     cert_filename: ชื่อไฟล์ใบรับรองฯ PDF เช่น 20260624-ใบรับรองแทนใบเสร็จรับเงิน.pdf
@@ -96,20 +128,3 @@ def append_transactions(slips: list[dict], category: str,
     if rows:
         ws.append_rows(rows, value_input_option="USER_ENTERED")
         print(f"    ✅ บันทึก {len(rows)} transactions ลง Sheets")
-
-
-def _get_drive_link_by_name(drive_client, filename: str) -> str:
-    """ค้นหาไฟล์ใน Drive จากชื่อไฟล์ตรงๆ"""
-    if not filename:
-        return ""
-    try:
-        result = drive_client.files().list(
-            q=f"name='{filename}' and trashed=false",
-            fields="files(id, name, webViewLink)",
-        ).execute()
-        files = result.get("files", [])
-        if files:
-            return files[0].get("webViewLink", "")
-    except Exception as e:
-        print(f"    ⚠️  Drive link error ({filename}): {e}")
-    return ""

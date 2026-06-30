@@ -192,10 +192,11 @@ def main():
 
     # ── 4. บันทึก transactions ลง Google Sheets (หลัง sync เสร็จ ไฟล์มีบน Drive แล้ว) ──
     pending = gen_result.get("_pending_transactions", [])
+    log(f"\n── บันทึก Transactions ({len(pending)} groups) ──")
     if pending:
-        log("\n── บันทึก Transactions ──")
         from utils.transactions import append_transactions
         for item in pending:
+            log(f"   📦 category={item['category']} cert={item['cert_filename']} receipts={list(item['receipt_filenames'].keys())}")
             try:
                 append_transactions(
                     slips=item["slips"],
@@ -205,6 +206,8 @@ def main():
                 )
             except Exception as e:
                 log(f"   ⚠️  บันทึก transactions ไม่ได้: {e}")
+    else:
+        log("   ℹ️  ไม่มี pending transactions")
 
     total_elapsed = fmt_duration(time.time() - t_total)
     notify.send(f"✅ Pipeline เสร็จสิ้น\n⏱ Process: {process_elapsed}\n🔄 Sync: {sync_elapsed}\n⏱ รวม: {total_elapsed}")
