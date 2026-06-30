@@ -41,14 +41,52 @@ def ensure_header(ws):
 
 
 def clear_transactions():
-    """ลบข้อมูลทั้งหมดใน Transactions Sheet (เก็บ header ไว้)"""
+    """ลบข้อมูลทั้งหมดใน Transactions Sheet (เก็บ header ไว้) พร้อมล้าง filter/named range เก่า"""
     try:
         gc, drive = _get_clients()
         sh = gc.open_by_key(TRANSACTIONS_SHEET_ID)
         ws = sh.worksheet(TRANSACTIONS_SHEET_NAME)
+
+        # ลบ basic filter (ถ้ามี) ก่อน clear เนื้อหา
+        try:
+            ws.clear_basic_filter()
+        except Exception:
+            pass
+
         ws.clear()
+
+        # ลบ format/border เก่าทั้งหมด (กันกรอบเขียวค้าง)
+        try:
+            sh.batch_update({
+                "requests": [{
+                    "updateCells": {
+                        "range": {"sheetId": ws.id},
+                        "fields": "userEnteredFormat",
+                    }
+                }]
+            })
+        except Exception:
+            pass
+
+        # ลบ filter views ที่ค้างอยู่ (ถ้ามี) ผ่าน batchUpdate
+        try:
+            sheet_id = ws.id
+            spreadsheet_meta = sh.fetch_sheet_metadata()
+            for sheet in spreadsheet_meta.get("sheets", []):
+                if sheet["properties"]["sheetId"] != sheet_id:
+                    continue
+                filter_views = sheet.get("filterViews", [])
+                requests = [
+                    {"deleteFilterView": {"filterId": fv["filterViewId"]}}
+                    for fv in filter_views
+                ]
+                if requests:
+                    sh.batch_update({"requests": requests})
+        except Exception as e:
+            print(f"    ⚠️  ลบ filter views ไม่ได้: {e}")
+
         ensure_header(ws)
-        print("✅ Clear Transactions Sheet เสร็จแล้ว")
+        print("✅ Clear Transactions Sheet เสร็จแล้ว (รวม filter/format)")
     except Exception as e:
         print(f"❌ Clear Transactions Sheet ไม่ได้: {e}")
 
