@@ -545,25 +545,19 @@ def run(local_data_path: str | None = None) -> dict:
                     log(f"    ✅ [{sf}] {pdf_path.name} (฿{total_amt:,.0f})")
                     results["new"] += 1
 
-                    # ── บันทึก transactions ลง Google Sheets ──
-                    try:
-                        from utils.transactions import append_transactions
-                        # สร้าง receipt_paths map
-                        receipt_paths = {}
-                        if local_receipt_dir.exists():
-                            for rf in local_receipt_dir.glob("*.pdf"):
-                                # ชื่อไฟล์ เช่น 20260624-นาย วิชา.pdf → นาย วิชา
-                                name_part = rf.stem[9:]  # ตัด YYYYMMDD- ออก
-                                receipt_paths[name_part] = str(rf)
+                    # เก็บข้อมูลไว้สำหรับบันทึก transactions หลัง sync เสร็จ (ต้องมีไฟล์บน Drive ก่อนหา link ได้)
+                    receipt_paths_rel = {}
+                    if local_receipt_dir.exists():
+                        for rf in local_receipt_dir.glob("*.pdf"):
+                            name_part = rf.stem[9:]
+                            receipt_paths_rel[name_part] = rf.name
 
-                        append_transactions(
-                            slips=group_new,
-                            category=sf,
-                            cert_path=str(pdf_path),
-                            receipt_paths=receipt_paths,
-                        )
-                    except Exception as e:
-                        log(f"    ⚠️  บันทึก transactions ไม่ได้: {e}")
+                    results.setdefault("_pending_transactions", []).append({
+                        "slips": group_new,
+                        "category": sf,
+                        "cert_filename": pdf_path.name,
+                        "receipt_filenames": receipt_paths_rel,
+                    })
 
         save_summary(year_dir, summary)
 

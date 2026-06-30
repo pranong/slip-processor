@@ -190,6 +190,22 @@ def main():
 
     sync_elapsed = fmt_duration(time.time() - t_sync)
 
+    # ── 4. บันทึก transactions ลง Google Sheets (หลัง sync เสร็จ ไฟล์มีบน Drive แล้ว) ──
+    pending = gen_result.get("_pending_transactions", [])
+    if pending:
+        log("\n── บันทึก Transactions ──")
+        from utils.transactions import append_transactions
+        for item in pending:
+            try:
+                append_transactions(
+                    slips=item["slips"],
+                    category=item["category"],
+                    cert_filename=item["cert_filename"],
+                    receipt_filenames=item["receipt_filenames"],
+                )
+            except Exception as e:
+                log(f"   ⚠️  บันทึก transactions ไม่ได้: {e}")
+
     total_elapsed = fmt_duration(time.time() - t_total)
     notify.send(f"✅ Pipeline เสร็จสิ้น\n⏱ Process: {process_elapsed}\n🔄 Sync: {sync_elapsed}\n⏱ รวม: {total_elapsed}")
 
