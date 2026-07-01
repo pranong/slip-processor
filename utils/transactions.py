@@ -91,25 +91,83 @@ def clear_transactions():
         print(f"❌ Clear Transactions Sheet ไม่ได้: {e}")
 
 
+SLIP_PROCESSOR_FOLDER = None  # cache folder ID
+
+
+def _get_folder_id(drive_client, folder_name: str, parent_id: str = None) -> str:
+    """หา folder ID จากชื่อ"""
+    q = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    if parent_id:
+        q += f" and '{parent_id}' in parents"
+    result = drive_client.files().list(q=q, fields="files(id)").execute()
+    files = result.get("files", [])
+    return files[0]["id"] if files else ""
+
+
+def _get_root_folder_id(drive_client) -> str:
+    """หา SlipProcessor folder ID (cache ไว้)"""
+    global SLIP_PROCESSOR_FOLDER
+    if SLIP_PROCESSOR_FOLDER:
+        return SLIP_PROCESSOR_FOLDER
+    SLIP_PROCESSOR_FOLDER = _get_folder_id(drive_client, "SlipProcessor")
+    return SLIP_PROCESSOR_FOLDER
+
+
 def _get_drive_link_by_name(drive_client, filename: str) -> str:
-    """ค้นหาไฟล์ใน Drive จากชื่อไฟล์ตรงๆ"""
+    """ค้นหาไฟล์ใน Drive ภายใน SlipProcessor folder"""
     if not filename:
         return ""
     try:
+        root_id = _get_root_folder_id(drive_client)
+        # search ภายใน SlipProcessor subtree
+        q = f"name='{filename}' and trashed=false"
+        if root_id:
+            # ใช้ corpora=allDrives ไม่ได้กับ service account ธรรมดา
+            # แต่ถ้า search ทั้ง Drive แล้วเจอหลายไฟล์ จะเลือกผิด
+            # ดังนั้น search ทั้งหมดแล้ว filter ด้วย parents chain
+            pass
         result = drive_client.files().list(
-            q=f"name='{filename}' and trashed=false",
-            fields="files(id, name, webViewLink)",
+            q=q,
+            fields="files(id, name, webViewLink, parents)",
         ).execute()
         files = result.get("files", [])
-        if files:
+        if len(files) == 1:
             url = files[0].get("webViewLink", "")
             print(f"      🔗 พบไฟล์ '{filename}' → {url}")
+            return url
+        elif len(files) > 1 and root_id:
+            # หลายไฟล์ชื่อเดียวกัน — เลือกอันที่อยู่ใน SlipProcessor
+            for f in files:
+                if _is_in_folder(drive_client, f.get("id", ""), root_id):
+                    url = f.get("webViewLink", "")
+                    print(f"      🔗 พบไฟล์ '{filename}' (filtered) → {url}")
+                    return url
+            # ถ้าหาไม่เจอใน folder ก็ return ตัวแรก
+            url = files[0].get("webViewLink", "")
+            print(f"      🔗 พบไฟล์ '{filename}' (fallback) → {url}")
             return url
         else:
             print(f"      ❌ ไม่พบไฟล์ '{filename}' บน Drive")
     except Exception as e:
         print(f"      ⚠️  Drive link error ({filename}): {e}")
     return ""
+
+
+def _is_in_folder(drive_client, file_id: str, target_folder_id: str, depth: int = 5) -> bool:
+    """เช็คว่าไฟล์อยู่ภายใน folder (traverse parents ขึ้นไป)"""
+    current = file_id
+    for _ in range(depth):
+        try:
+            f = drive_client.files().get(fileId=current, fields="parents").execute()
+            parents = f.get("parents", [])
+            if not parents:
+                return False
+            if target_folder_id in parents:
+                return True
+            current = parents[0]
+        except Exception:
+            return False
+    return False
 
 
 def append_transactions(slips: list[dict], category: str,
@@ -146,6 +204,29 @@ def append_transactions(slips: list[dict], category: str,
 
     cert_url_raw = _get_drive_link_by_name(drive, cert_filename) if cert_filename else ""
     cert_url = f'=HYPERLINK("{cert_url_raw}","{cert_filename}")' if cert_url_raw else ""
+
+    # ── ลบ row เดิมที่มี date + category เดียวกัน (batch แทนทีละ row) ──
+    try:
+        all_values = ws.get_all_values()
+        if len(all_values) > 1:
+            first = slips[0] if slips else {}
+            day   = first.get("day", "")
+            month = first.get("month", "")
+            year  = first.get("year_ce", "")
+            target_date = f"{year}-{month:02d}-{day:02d}" if (day and month and year) else ""
+
+            header = all_values[0]
+            keep_rows = [row for row in all_values[1:]
+                         if not (len(row) >= 2 and row[0] == target_date and row[1] == category)]
+            removed = len(all_values) - 1 - len(keep_rows)
+            if removed > 0:
+                ws.clear()
+                ws.append_row(header, value_input_option="USER_ENTERED")
+                if keep_rows:
+                    ws.append_rows(keep_rows, value_input_option="USER_ENTERED")
+                print(f"    🗑️  ลบ {removed} rows เดิม ({target_date}/{category})")
+    except Exception as e:
+        print(f"    ⚠️  dedup error: {e}")
 
     rows = []
     for slip in slips:

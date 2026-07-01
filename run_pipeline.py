@@ -212,6 +212,13 @@ def main():
     total_elapsed = fmt_duration(time.time() - t_total)
     notify.send(f"✅ Pipeline เสร็จสิ้น\n⏱ Process: {process_elapsed}\n🔄 Sync: {sync_elapsed}\n⏱ รวม: {total_elapsed}")
 
+    # ── cleanup temp files ──
+    import shutil as _shutil
+    if local_data:
+        _shutil.rmtree(local_data, ignore_errors=True)
+    if local_output:
+        _shutil.rmtree(local_output, ignore_errors=True)
+
     log(f"\n✅ เสร็จสิ้น {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} — รวม: {total_elapsed}")
     log(f"   Process: {process_elapsed} | Sync: {sync_elapsed}")
     log(f"   log: {log_file}")

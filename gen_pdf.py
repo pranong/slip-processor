@@ -371,21 +371,42 @@ def fill_template_receipt(slips: list[dict], day_str: str, month_name: str,
 
 
 def convert_to_pdf(docx_path: Path, output_dir: Path) -> Path | None:
-    """แปลง docx เป็น PDF ด้วย LibreOffice"""
+    """แปลง docx เป็น PDF ด้วย LibreOffice พร้อม retry ถ้า lock"""
+    import time as _time
     output_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        result = subprocess.run(
-            ["libreoffice", "--headless", "--convert-to", "pdf",
-             "--outdir", str(output_dir), str(docx_path)],
-            capture_output=True, text=True, timeout=120
-        )
-        pdf_name = docx_path.stem + ".pdf"
-        pdf_path = output_dir / pdf_name
-        if pdf_path.exists():
-            return pdf_path
-        log(f"    ⚠️  LibreOffice error: {result.stderr[:200]}")
-    except Exception as e:
-        log(f"    ⚠️  Convert error: {e}")
+
+    for attempt in range(3):
+        try:
+            result = subprocess.run(
+                ["libreoffice", "--headless", "--convert-to", "pdf",
+                 "--outdir", str(output_dir), str(docx_path)],
+                capture_output=True, text=True, timeout=120
+            )
+            pdf_name = docx_path.stem + ".pdf"
+            pdf_path = output_dir / pdf_name
+            if pdf_path.exists():
+                return pdf_path
+
+            # ถ้า convert ไม่สำเร็จ เช็ค lock file
+            lock_dir = Path.home() / ".config/libreoffice/.~lock.*"
+            lock_profile = Path.home() / ".config/libreoffice/user/.lock"
+            for lock in [lock_profile, *Path.home().glob(".config/libreoffice/.~lock.*")]:
+                if lock.exists():
+                    lock.unlink(missing_ok=True)
+                    log(f"    🔓 ลบ lock file: {lock}")
+
+            if attempt < 2:
+                log(f"    ⚠️  LibreOffice retry ({attempt + 1}/3)...")
+                _time.sleep(3)
+            else:
+                log(f"    ⚠️  LibreOffice error: {result.stderr[:200]}")
+        except subprocess.TimeoutExpired:
+            log(f"    ⚠️  LibreOffice timeout — kill แล้ว retry...")
+            subprocess.run(["pkill", "-f", "soffice"], capture_output=True)
+            _time.sleep(3)
+        except Exception as e:
+            log(f"    ⚠️  Convert error: {e}")
+            break
     return None
 
 # ── Main ──────────────────────────────────────────────────────────────────────

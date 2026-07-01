@@ -223,7 +223,22 @@ def run() -> dict:
                     return
 
             # ── อ่าน slip (Claude API) — ต้องได้ ref ก่อนเช็คซ้ำ ──
-            info = read_slip(client, img)
+            import time as _time
+            for attempt in range(3):
+                try:
+                    info = read_slip(client, img)
+                    break
+                except Exception as api_err:
+                    if "rate" in str(api_err).lower() or "429" in str(api_err):
+                        wait = 10 * (attempt + 1)
+                        log(f"⚠️  rate limit — รอ {wait} วิ แล้ว retry...")
+                        _time.sleep(wait)
+                    else:
+                        log(f"❌ API error: {api_err}")
+                        info = None
+                        break
+            else:
+                info = None
             if info is None:
                 safe_copy(img, local_data / "unclassified" / "invalid")
                 log(f"❌ อ่านไม่ได้")
