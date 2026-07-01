@@ -206,67 +206,76 @@ def fill_template(slips: list[dict], day_str: str, month_name: str,
         return None
     table = doc.tables[0]
 
-    # หา row ที่มี $date[0] (template row)
+    # หา template row — รองรับทั้ง format ใหม่ ($seq[0]) และเก่า ($date[0])
     template_row_idx = None
     total_row_idx = None
+    is_new_format = False  # True = ใบรับรองฯ ใหม่ ($seq), False = บริษัท ($date[0])
     for idx, row in enumerate(table.rows):
         row_text = "".join(cell.text for cell in row.cells)
-        if "$date[0]" in row_text:
+        if "$seq[0]" in row_text:
             template_row_idx = idx
+            is_new_format = True
+        elif "$date[0]" in row_text and template_row_idx is None:
+            template_row_idx = idx
+            is_new_format = False
         if "$intSumTotal" in row_text:
             total_row_idx = idx
 
     if template_row_idx is None:
-        log("    ⚠️  ไม่พบ $date[0] ใน template")
+        log("    ⚠️  ไม่พบ $seq[0] หรือ $date[0] ใน template")
         return None
 
-    # ── เติมข้อมูล ──
-    # ถ้ามีมากกว่า 1 slip ต้อง clone row เพิ่ม
-    # clone ก่อน (จาก row template) แล้วค่อยเติม
+    # ── clone row ถ้ามีมากกว่า 1 slip ──
     if len(slips) > 1:
         for _ in range(len(slips) - 1):
             _clone_row(table, template_row_idx)
 
-    # เติมข้อมูลแต่ละ row
+    # ── เติมข้อมูลแต่ละ row ──
     total = 0
     for i, slip in enumerate(slips):
         row_idx = template_row_idx + i
         tr = table.rows[row_idx]._tr
 
-        day_val  = slip.get("day", "")
-        mon_val  = slip.get("month", "")
-        year_val = slip.get("year_ce", "")
-        # แปลงเป็น พ.ศ.
-        year_be  = year_val + 543 if isinstance(year_val, int) else ""
-        date_str = f"{day_val}/{mon_val}/{year_be}" if day_val else ""
         desc_str = slip.get("note") or slip.get("description") or "-"
         amt      = slip.get("amount") or 0
         amt_str  = f"{amt:,.2f}"
         total   += amt
 
-        _set_cell_text(tr, 0, date_str)    # วัน เดือน ปี
-        _set_cell_text(tr, 1, desc_str)    # รายละเอียดการจ่าย
-        _set_cell_text(tr, 2, amt_str)     # จำนวนเงิน
-        # col 3 (หมายเหตุ) — ว่าง
+        if is_new_format:
+            # format ใหม่: ลำดับ | รายละเอียด | จำนวนเงิน | หมายเหตุ
+            _set_cell_text(tr, 0, str(i + 1))  # ลำดับ
+            _set_cell_text(tr, 1, desc_str)
+            _set_cell_text(tr, 2, amt_str)
+        else:
+            # format เก่า: วันที่ | รายละเอียด | จำนวนเงิน | หมายเหตุ
+            day_val  = slip.get("day", "")
+            mon_val  = slip.get("month", "")
+            year_val = slip.get("year_ce", "")
+            year_be  = year_val + 543 if isinstance(year_val, int) else ""
+            date_str = f"{day_val}/{mon_val}/{year_be}" if day_val else ""
+            _set_cell_text(tr, 0, date_str)
+            _set_cell_text(tr, 1, desc_str)
+            _set_cell_text(tr, 2, amt_str)
 
-    # เติม total row
+    # เติม total
     total_str    = f"{total:,.2f}"
     total_th_str = baht_text(total)
 
-    # วันที่ของเอกสาร (fromDate = toDate = วันนี้ เพราะ gen ต่อวัน)
-    # ดึงจาก slip แรกใน list
-    first = slips[0] if slips else {}
+    # วันที่เอกสาร จาก slip แรก
+    first  = slips[0] if slips else {}
     day_v  = first.get("day", "")
     mon_v  = first.get("month", "")
     yr_v   = first.get("year_ce", "")
     yr_be  = yr_v + 543 if isinstance(yr_v, int) else ""
     doc_date = f"{day_v}/{mon_v}/{yr_be}" if day_v else ""
 
-    # แทน placeholders ทั้งหมด (รองรับ split across runs)
+    # แทน placeholders (ยาวก่อนสั้น กัน $date ไป match $fromDate)
     _replace_text_in_doc(doc, "$intSumTotal", total_str)
     _replace_text_in_doc(doc, "$thSumTotal", total_th_str)
     _replace_text_in_doc(doc, "$fromDate", doc_date)
     _replace_text_in_doc(doc, "$toDate", doc_date)
+    if is_new_format:
+        _replace_text_in_doc(doc, "$date", doc_date)
 
     # บันทึก docx ชั่วคราว
     import tempfile
