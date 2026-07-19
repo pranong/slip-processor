@@ -15,13 +15,12 @@ RAW_MOUNT      = f"{MOUNT_DIR}/rawFile"
 DATA_MOUNT     = f"{MOUNT_DIR}/data"
 TEMPLATE_DIR   = f"{CODE_DIR}/template"
 TEMPLATE_PATH  = f"{TEMPLATE_DIR}/ใบรับรองแทนใบเสร็จรับเงิน.docx"
-HASH_DB_PATH   = f"{CODE_DIR}/data/processed_hashes.json"
+REF_DB_PATH    = f"{CODE_DIR}/data/processed_refs.json"
 LOG_DIR        = f"{CODE_DIR}/data/logs"
 
 # ── Claude API ────────────────────────────────────────────────────────────────
 ANTHROPIC_API_KEY = "YOUR_ANTHROPIC_API_KEY"
 CLAUDE_MODEL      = "claude-sonnet-4-6"
-HASH_THRESHOLD    = 8
 
 # ── Telegram Bot ──────────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN"

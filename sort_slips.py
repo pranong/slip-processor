@@ -1,7 +1,7 @@
 from utils.logger import log
 """
 sort_slips.py — อ่าน slip + ดึงข้อมูลทั้งหมดในรอบเดียว + แยก folder + เช็คซ้ำ
-เรียก Claude API แค่ครั้งเดียวต่อรูป (ประหยัด cost)
+เรียก Claude API ทุกรูปเสมอ (ยอมเสีย API cost) แล้วเช็คซ้ำด้วย ref เท่านั้น — ดู Dedup Logic
 """
 
 import anthropic
@@ -13,12 +13,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import imagehash
-from PIL import Image
-
 from config.config import (
-    RAW_MOUNT, DATA_MOUNT, HASH_DB_PATH,
-    ANTHROPIC_API_KEY, CLAUDE_MODEL, HASH_THRESHOLD, MONTH_MAP, IMAGE_EXTS
+    RAW_MOUNT, DATA_MOUNT, REF_DB_PATH,
+    ANTHROPIC_API_KEY, CLAUDE_MODEL, MONTH_MAP, IMAGE_EXTS
 )
 
 # ── Claude Prompt (ดึงทุกอย่างในรอบเดียว) ────────────────────────────────────
@@ -45,48 +42,22 @@ SYSTEM_PROMPT = """คุณคือระบบดึงข้อมูลจ�
 - ถ้าปีเป็น พ.ศ. ให้แปลงเป็น ค.ศ. (พ.ศ. - 543 = ค.ศ.)
 - ถ้าหาวันที่ไม่ได้เลยให้ตอบ: {"error": "date not found"}"""
 
-# ── Hash DB ───────────────────────────────────────────────────────────────────
+# ── Ref DB ────────────────────────────────────────────────────────────────────
+# เก็บ ref → record ของ slip ที่เคย sort แล้ว ใช้เช็คซ้ำแทน phash ทั้งหมด
+# (phash เคย false positive กับสลิปธนาคารเดียวกันที่ layout เหมือนกันแต่เนื้อหาต่างกัน)
 
-def load_hash_db() -> dict:
-    p = Path(HASH_DB_PATH)
+def load_ref_db() -> dict:
+    p = Path(REF_DB_PATH)
     if p.exists():
         return json.loads(p.read_text(encoding="utf-8"))
     return {}
 
 
-def save_hash_db(db: dict):
-    Path(HASH_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    Path(HASH_DB_PATH).write_text(
+def save_ref_db(db: dict):
+    Path(REF_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    Path(REF_DB_PATH).write_text(
         json.dumps(db, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-
-
-def get_phash(path: Path) -> str | None:
-    try:
-        return str(imagehash.phash(Image.open(path).convert("RGB")))
-    except Exception:
-        return None
-
-
-PHASH_UNCERTAIN = 8   # ≤8 → เช็ค ref เสมอ ไม่มี exact zone
-
-
-def find_duplicate(phash_str: str, db: dict, ref: str | None = None) -> dict | None:
-    """
-    เช็คซ้ำ:
-    - phash diff = 0  → ซ้ำแน่นอน (รูปเดิม 100%)
-    - phash diff 1-8  → เช็ค ref ด้วย ถ้า ref ตรง = ซ้ำ
-    - phash diff > 8  → ไม่ซ้ำ
-    """
-    current = imagehash.hex_to_hash(phash_str)
-    for stored_str, record in db.items():
-        diff = current - imagehash.hex_to_hash(stored_str)
-        if diff == 0:
-            return record  # รูปเดิม 100% ซ้ำแน่นอน
-        if diff <= PHASH_UNCERTAIN and ref and record.get("ref"):
-            if ref == record["ref"]:
-                return record  # ref ตรง = ซ้ำ
-    return None
 
 # ── Claude API ────────────────────────────────────────────────────────────────
 
@@ -190,7 +161,7 @@ def run() -> dict:
     local_data.mkdir(parents=True)
 
     client   = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    hash_db  = load_hash_db()
+    ref_db   = load_ref_db()
     results  = {"new": 0, "duplicate": 0, "no_note": 0, "invalid": 0, "failed": 0, "details": []}
     lock     = threading.Lock()
 
@@ -202,27 +173,7 @@ def run() -> dict:
         try:
             log(f"[{i:4d}/{len(local_images)}] {img.name}")
 
-            phash = get_phash(img)
-
-            # ── เช็ค phash = 0 ก่อน (รูปเดิม 100%) ไม่ต้อง call API ──
-            if phash:
-                found_dup = None
-                with lock:
-                    for stored_str, record in hash_db.items():
-                        if (imagehash.hex_to_hash(phash) - imagehash.hex_to_hash(stored_str)) == 0:
-                            found_dup = record
-                            break
-                if found_dup:
-                    log(f"⚠️  ซ้ำ (รูปเดิม) → '{img.name}' ซ้ำกับ '{found_dup['filename']}'")
-                    with lock:
-                        results["duplicate"] += 1
-                        results["details"].append({
-                            "file": img.name, "status": "duplicate",
-                            "original": found_dup["filename"],
-                        })
-                    return
-
-            # ── อ่าน slip (Claude API) — ต้องได้ ref ก่อนเช็คซ้ำ ──
+            # ── อ่าน slip (Claude API) — ยิงทุกรูปเสมอ ไม่มี phash pre-filter ──
             import time as _time
             for attempt in range(3):
                 try:
@@ -247,11 +198,11 @@ def run() -> dict:
                     results["details"].append({"file": img.name, "status": "invalid"})
                 return
 
-            # ── เช็คซ้ำ (phash + ref) ──
+            # ── เช็คซ้ำ (ref เท่านั้น) ──
             ref = info.get("ref")
-            if phash:
+            if ref:
                 with lock:
-                    dup = find_duplicate(phash, hash_db, ref=ref)
+                    dup = ref_db.get(ref)
                 if dup:
                     log(f"⚠️  ซ้ำ → '{img.name}' ซ้ำกับ '{dup['filename']}' ref={ref}")
                     with lock:
@@ -292,12 +243,11 @@ def run() -> dict:
             log(f"📅 {day_str}/{month_name}/{year} ฿{info.get('amount', 0):,.0f}")
 
             with lock:
-                if phash:
-                    hash_db[phash] = {
+                if ref:
+                    ref_db[ref] = {
                         "filename": img.name,
                         "dest": f"{year_str}/{month_name}/{day_str}/images/{dest_img.name}",
                         "day": day, "month": month, "year": year,
-                        "ref": info.get("ref"),
                     }
                 results["new"] += 1
                 results["details"].append({
@@ -337,7 +287,7 @@ def run() -> dict:
         except Exception:
             pass
 
-    save_hash_db(hash_db)
+    save_ref_db(ref_db)
 
     # ── rclone upload ย้ายไปทำที่ run_pipeline แทน ──
     log(f"\n{'='*55}")
