@@ -33,23 +33,21 @@ def setup_logging():
 
 def clear_raw_files():
     import subprocess
-    try:
-        result = subprocess.run([
-            "rclone", "delete", "gdrive:SlipProcessor/rawFile",
-            "--filter", "+ *.jpg",
-            "--filter", "+ *.jpeg",
-            "--filter", "+ *.png",
-            "--filter", "+ *.webp",
-            "--filter", "+ *.JPG",
-            "--filter", "+ *.JPEG",
-            "--filter", "+ *.PNG",
-            "--filter", "+ *.WEBP",
-            "--filter", "- *",
-            "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-        ], capture_output=True, text=True, timeout=120)
-    except subprocess.TimeoutExpired:
-        log("⚠️  ลบ rawFile ค้างเกิน 2 นาที — เช็ค mount/network")
-        return 0
+    # ไม่ใส่ timeout ตั้งใจ (เหมือนจุดอื่น) — ไฟล์เยอะ = API round-trip สะสม ไม่ใช่ค้างจริง
+    result = subprocess.run([
+        "rclone", "delete", "gdrive:SlipProcessor/rawFile",
+        "--filter", "+ *.jpg",
+        "--filter", "+ *.jpeg",
+        "--filter", "+ *.png",
+        "--filter", "+ *.webp",
+        "--filter", "+ *.JPG",
+        "--filter", "+ *.JPEG",
+        "--filter", "+ *.PNG",
+        "--filter", "+ *.WEBP",
+        "--filter", "- *",
+        "--checkers", "16",
+        "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+    ], capture_output=True, text=True)
     if result.returncode == 0:
         log("🗑️  ลบรูปใน rawFile เสร็จแล้ว")
     else:
