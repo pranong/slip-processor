@@ -24,17 +24,31 @@ from config.config import ANTHROPIC_API_KEY, CLAUDE_MODEL, DATA_MOUNT, IMAGE_EXT
 from sort_slips import read_slip, load_ref_db, save_ref_db
 
 
-def find_missing_metadata_days(data_root: Path):
-    """เดินหา {year}/{month}/{day}/images ที่มีรูปแต่ขาด metadata คู่กัน (บางส่วนหรือทั้งหมด)"""
+def find_missing_metadata_days(data_root: Path, scope: str | None = None):
+    """
+    เดินหา {year}/{month}/{day}/images ที่มีรูปแต่ขาด metadata คู่กัน (บางส่วนหรือทั้งหมด)
+    scope จำกัดขอบเขตได้ เช่น "2026", "2026/JAN", "2026/JAN/01" (ไม่ใส่ = ทั้งหมด)
+    """
+    scope_parts = scope.strip("/").split("/") if scope else []
+    scope_year  = scope_parts[0] if len(scope_parts) >= 1 else None
+    scope_month = scope_parts[1] if len(scope_parts) >= 2 else None
+    scope_day   = scope_parts[2] if len(scope_parts) >= 3 else None
+
     missing = []
     for year_dir in sorted(data_root.iterdir()):
         if not year_dir.is_dir() or year_dir.name in ("unclassified", "backups", "logs"):
             continue
+        if scope_year and year_dir.name != scope_year:
+            continue
         for month_dir in sorted(year_dir.iterdir()):
             if not month_dir.is_dir():
                 continue
+            if scope_month and month_dir.name != scope_month:
+                continue
             for day_dir in sorted(month_dir.iterdir()):
                 if not day_dir.is_dir():
+                    continue
+                if scope_day and day_dir.name != scope_day:
                     continue
                 images_dir   = day_dir / "images"
                 metadata_dir = day_dir / "metadata"
@@ -50,12 +64,13 @@ def find_missing_metadata_days(data_root: Path):
     return missing
 
 
-def run(dry_run: bool = False):
+def run(dry_run: bool = False, scope: str | None = None):
     data_root = Path(DATA_MOUNT)
-    missing_days = find_missing_metadata_days(data_root)
+    missing_days = find_missing_metadata_days(data_root, scope=scope)
     total_images = sum(len(imgs) for *_, imgs in missing_days)
 
-    log(f"📋 พบ {len(missing_days)} วันที่ metadata ขาด รวม {total_images} รูป")
+    scope_label = f" (scope: {scope})" if scope else ""
+    log(f"📋 พบ {len(missing_days)} วันที่ metadata ขาด รวม {total_images} รูป{scope_label}")
     for year, month, day, imgs in missing_days:
         log(f"   {year}/{month}/{day} — {len(imgs)} รูป")
 
@@ -132,5 +147,6 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="กู้ metadata JSON ที่หายไปจากรูปที่มีอยู่แล้ว")
     parser.add_argument("--dry-run", action="store_true", help="แค่สแกนนับจำนวน ไม่เรียก API ไม่เขียนอะไร")
+    parser.add_argument("--scope", help='จำกัดขอบเขต เช่น "2026", "2026/JAN", "2026/JAN/01" (ไม่ใส่ = ทั้งหมด)')
     args = parser.parse_args()
-    run(dry_run=args.dry_run)
+    run(dry_run=args.dry_run, scope=args.scope)
