@@ -152,10 +152,11 @@ def run() -> dict:
             "--include", "*.png", "--include", "*.webp",
             "--include", "*.JPG", "--include", "*.JPEG",
             "--include", "*.PNG", "--include", "*.WEBP",
+            "--transfers", "8", "--checkers", "16",
             "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-        ], timeout=300)
+        ], timeout=1800)
     except subprocess.TimeoutExpired:
-        log("❌ rclone copy rawFile ค้างเกิน 5 นาที — เช็ค mount/network")
+        log("❌ rclone copy rawFile ค้างเกิน 30 นาที — เช็ค mount/network")
         return {"new": 0, "duplicate": 0, "no_note": 0, "invalid": 0}
     local_images = [f for f in sorted(local_raw.iterdir()) if f.suffix.lower() in IMAGE_EXTS]
     log(f"   ✅ copy {len(local_images)} รูปเสร็จ")

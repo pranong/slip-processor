@@ -622,14 +622,15 @@ if __name__ == "__main__":
 
     # ── sync local_output (PDF) ขึ้น Drive ──
     local_output = result.get("_local_output")
+    pdf_ok = True
     if local_output:
         log("\n── Sync PDFs ขึ้น Drive ──")
         from run_pipeline import sync_output_dir
-        sync_output_dir(local_output)
-        log("   ✅ PDFs synced")
+        pdf_ok = sync_output_dir(local_output)
+        log("   ✅ PDFs synced" if pdf_ok else "   ❌ sync PDFs ล้มเหลว — ข้ามบันทึก transactions")
 
     # ── บันทึก transactions ลง Google Sheets (หลัง sync เสร็จ) ──
-    pending = result.get("_pending_transactions", [])
+    pending = result.get("_pending_transactions", []) if pdf_ok else []
     if pending:
         log(f"\n── บันทึก Transactions ({len(pending)} groups) ──")
         from utils.transactions import append_transactions

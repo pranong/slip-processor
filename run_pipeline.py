@@ -57,24 +57,36 @@ def clear_raw_files():
     return 0
 
 
-def sync_output_dir(local_dir: str, timeout: int = 300):
+def sync_to_drive(local_dir: str, timeout: int = 1800) -> bool:
     """
-    Upload PDF output ขึ้น Drive — copy ก้อนเดียว (--ignore-times บังคับทับไฟล์เดิมเสมอ เผื่อ regen
-    แล้วขนาด/เวลาเผอิญตรงกัน) ไม่ลบไฟล์เก่าที่ไม่ได้ gen ซ้ำรอบนี้ (ยอมรับไฟล์ค้างได้ แลกกับความเร็ว)
+    Upload local_dir ขึ้น Drive (`gdrive:SlipProcessor/data`) — copy ก้อนเดียว (--ignore-times
+    บังคับทับไฟล์เดิมเสมอ เผื่อ regen แล้วขนาด/เวลาเผอิญตรงกัน)
+    timeout ยาวเท่ากับตอนโหลด rawFile (เน็ต Pi ช้า ~150-200 KB/s เป็นปกติ ไม่ใช่ค้าง)
+    return True = sync สำเร็จจริง, False = timeout/error — ห้ามให้ caller ทำ clear_raw_files()
+    หรือบันทึก transactions ต่อถ้า return False เพราะไฟล์อาจยังไม่ครบบน Drive
     """
     import subprocess
     base = Path(local_dir)
     if not base.exists():
-        return
+        return True
     try:
-        subprocess.run([
+        result = subprocess.run([
             "rclone", "copy", str(base),
             "gdrive:SlipProcessor/data",
             "--ignore-times",
             "--config", str(Path.home() / ".config/rclone/rclone.conf"),
         ], capture_output=True, timeout=timeout)
+        if result.returncode != 0:
+            log(f"   ⚠️  sync error: {result.stderr[:200]}")
+            return False
+        return True
     except subprocess.TimeoutExpired:
-        log(f"   ⚠️  sync PDFs ค้างเกิน {timeout} วิ — เช็ค mount/network")
+        log(f"   ⚠️  sync ค้างเกิน {timeout} วิ — เช็ค mount/network")
+        return False
+
+
+# alias เดิม (ใช้ใน gen_pdf.py --regen)
+sync_output_dir = sync_to_drive
 
 
 def check_mounts() -> bool:
@@ -186,32 +198,35 @@ def main():
 
     # ── 3. Sync ขึ้น Drive ทีเดียว ──
     t_sync = time.time()
-    import subprocess
 
     # 3a. upload metadata + images จาก sort
+    data_ok = True
     if local_data:
         log("\n── Sync data ──")
-        try:
-            subprocess.run([
-                "rclone", "copy", local_data,
-                "gdrive:SlipProcessor/data",
-                "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-            ], capture_output=True, timeout=300)
-            log("   ✅ data synced")
-        except subprocess.TimeoutExpired:
-            log("   ⚠️  sync data ค้างเกิน 5 นาที — เช็ค mount/network")
+        data_ok = sync_to_drive(local_data)
+        log("   ✅ data synced" if data_ok else "   ❌ sync data ล้มเหลว")
 
     # 3b. upload PDFs จาก gen
+    pdf_ok = True
     if local_output:
         log("\n── Sync PDFs ──")
-        sync_output_dir(local_output)
-        log("   ✅ PDFs synced")
-
-    # 3c. clear rawFile
-    log("\n── ขั้นตอน 3: clear rawFile ──")
-    clear_raw_files()
+        pdf_ok = sync_to_drive(local_output)
+        log("   ✅ PDFs synced" if pdf_ok else "   ❌ sync PDFs ล้มเหลว")
 
     sync_elapsed = fmt_duration(time.time() - t_sync)
+
+    if not (data_ok and pdf_ok):
+        msg = (f"🔴 Sync ขึ้น Drive ไม่สำเร็จ ({sync_elapsed}) — "
+               f"ข้าม clear rawFile และ บันทึก transactions เพื่อกันข้อมูลเพี้ยน "
+               f"รูปต้นฉบับใน rawFile ยังไม่ถูกลบ ปลอดภัย แต่ ref ของสลิปกลุ่มนี้ถูกบันทึกไปแล้วตอน sort "
+               f"ต้องล้าง data/processed_refs.json (หรือรัน scripts/reset.sh) ก่อน rerun ไม่งั้นจะโดนเข้าใจว่าซ้ำ")
+        log(f"\n{msg}")
+        notify.send(msg)
+        return
+
+    # 3c. clear rawFile (ทำเฉพาะตอน sync สำเร็จจริงเท่านั้น กันรูปต้นฉบับหายทั้งที่ยังไม่ขึ้น Drive)
+    log("\n── ขั้นตอน 3: clear rawFile ──")
+    clear_raw_files()
 
     # ── 4. บันทึก transactions ลง Google Sheets (หลัง sync เสร็จ ไฟล์มีบน Drive แล้ว) ──
     pending = gen_result.get("_pending_transactions", [])

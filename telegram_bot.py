@@ -21,7 +21,8 @@ API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 OFFSET  = 0
 RUNNING = False
 RUNNING_SINCE = None
-MAX_RUNNING_SECONDS = 30 * 60  # ค้างเกินนี้ถือว่า stuck (mount/rclone หลุดแบบไม่ raise) ปลดล็อกอัตโนมัติ
+MAX_RUNNING_SECONDS = 60 * 60  # ค้างเกินนี้ถือว่า stuck (mount/rclone หลุดแบบไม่ raise) ปลดล็อกอัตโนมัติ
+                                # ต้องนานกว่า rclone copy timeout (1800s ใน sort_slips.py) รวม gen+sync ด้วย ไม่งั้น auto-unlock ไวเกินไปตอนเน็ตช้าจริง
 LOCK    = threading.Lock()
 
 
@@ -139,30 +140,11 @@ def do_run(cmd: str):
             send_gen_summary(result, elapsed)
 
         elif cmd == "/run":
-            t_total = time.time()
-            send(f"🚀 Pipeline เริ่มแล้ว — {datetime.now().strftime('%H:%M:%S')}")
-
-            # sort
-            t0 = time.time()
-            sort_result = sort_slips.run()
-            from utils.vendor import reload_vendors
-            reload_vendors()
-            sort_elapsed = fmt_duration(time.time() - t0)
-            send_sort_summary(sort_result, sort_elapsed)
-
-            # clear
-            from run_pipeline import clear_raw_files
-            clear_raw_files()
-
-            # gen
-            t0 = time.time()
-            gen_result = gen_pdf.run()
-            gen_elapsed = fmt_duration(time.time() - t0)
-            send_gen_summary(gen_result, gen_elapsed)
-
-            # รวม
-            total_elapsed = fmt_duration(time.time() - t_total)
-            send(f"✅ Pipeline เสร็จสิ้น\n⏱ รวม: {total_elapsed}")
+            # เรียก run_pipeline.main() ตรงๆ แทนการ duplicate logic เอง — กัน sort/gen ผ่าน
+            # Telegram แล้วไม่ sync ขึ้น Drive / ลบ rawFile ทั้งที่ยังไม่ sync (บั๊กที่เจอมาก่อนหน้า)
+            # run_pipeline.main() ส่ง notify.send() ของตัวเองอยู่แล้ว (Telegram bot เดียวกัน)
+            from run_pipeline import main as run_pipeline_main
+            run_pipeline_main()
 
     except Exception as e:
         import traceback
