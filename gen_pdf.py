@@ -455,7 +455,9 @@ def run(local_data_path: str | None = None) -> dict:
                 images_dir   = day_dir / "images"
                 metadata_dir = day_dir / "metadata"
 
-                if not images_dir.exists():
+                # ไม่เช็คแค่ images_dir เพราะบางวัน metadata อยู่แต่รูปหาย (sync ไม่ครบในอดีต) —
+                # gen_pdf.py อ่านแค่ metadata JSON ไม่ใช้รูปเลย ข้ามได้ก็ต่อเมื่อไม่มีทั้งคู่จริงๆ
+                if not images_dir.exists() and not metadata_dir.exists():
                     continue
 
                 # ── copy metadata มา local temp ก่อนอ่าน (เร็วกว่าอ่านจาก mount ทีละไฟล์) ──
