@@ -618,4 +618,28 @@ if __name__ == "__main__":
         save_state(state)
         log(f"   Reset {count} groups — กำลัง gen...\n")
 
-    run()
+    result = run()
+
+    # ── sync local_output (PDF) ขึ้น Drive ──
+    local_output = result.get("_local_output")
+    if local_output:
+        log("\n── Sync PDFs ขึ้น Drive ──")
+        from run_pipeline import sync_output_dir
+        sync_output_dir(local_output)
+        log("   ✅ PDFs synced")
+
+    # ── บันทึก transactions ลง Google Sheets (หลัง sync เสร็จ) ──
+    pending = result.get("_pending_transactions", [])
+    if pending:
+        log(f"\n── บันทึก Transactions ({len(pending)} groups) ──")
+        from utils.transactions import append_transactions
+        for item in pending:
+            try:
+                append_transactions(
+                    slips=item["slips"],
+                    category=item["category"],
+                    cert_filename=item["cert_filename"],
+                    receipt_filenames=item["receipt_filenames"],
+                )
+            except Exception as e:
+                log(f"   ⚠️  บันทึก transactions ไม่ได้: {e}")

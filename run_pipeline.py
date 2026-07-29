@@ -57,6 +57,26 @@ def clear_raw_files():
     return 0
 
 
+def sync_output_dir(local_dir: str, timeout: int = 300):
+    """
+    Upload PDF output ขึ้น Drive — copy ก้อนเดียว (--ignore-times บังคับทับไฟล์เดิมเสมอ เผื่อ regen
+    แล้วขนาด/เวลาเผอิญตรงกัน) ไม่ลบไฟล์เก่าที่ไม่ได้ gen ซ้ำรอบนี้ (ยอมรับไฟล์ค้างได้ แลกกับความเร็ว)
+    """
+    import subprocess
+    base = Path(local_dir)
+    if not base.exists():
+        return
+    try:
+        subprocess.run([
+            "rclone", "copy", str(base),
+            "gdrive:SlipProcessor/data",
+            "--ignore-times",
+            "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+        ], capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        log(f"   ⚠️  sync PDFs ค้างเกิน {timeout} วิ — เช็ค mount/network")
+
+
 def check_mounts() -> bool:
     raw_ok  = Path(RAW_MOUNT).exists() and Path(RAW_MOUNT).is_dir()
     data_ok = Path(DATA_MOUNT).exists() and Path(DATA_MOUNT).is_dir()
@@ -184,15 +204,8 @@ def main():
     # 3b. upload PDFs จาก gen
     if local_output:
         log("\n── Sync PDFs ──")
-        try:
-            subprocess.run([
-                "rclone", "copy", local_output,
-                "gdrive:SlipProcessor/data",
-                "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-            ], capture_output=True, timeout=300)
-            log("   ✅ PDFs synced")
-        except subprocess.TimeoutExpired:
-            log("   ⚠️  sync PDFs ค้างเกิน 5 นาที — เช็ค mount/network")
+        sync_output_dir(local_output)
+        log("   ✅ PDFs synced")
 
     # 3c. clear rawFile
     log("\n── ขั้นตอน 3: clear rawFile ──")
