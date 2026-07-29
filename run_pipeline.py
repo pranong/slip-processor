@@ -70,14 +70,16 @@ def sync_to_drive(local_dir: str) -> bool:
     base = Path(local_dir)
     if not base.exists():
         return True
+    # ไม่ capture_output เพื่อให้ --stats พิมพ์ % progress ออกมาเป็นระยะระหว่างรัน (โผล่ใน log ตรงๆ)
     result = subprocess.run([
         "rclone", "copy", str(base),
         "gdrive:SlipProcessor/data",
         "--ignore-times",
+        "--stats", "30s", "-v",
         "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-    ], capture_output=True)
+    ])
     if result.returncode != 0:
-        log(f"   ⚠️  sync error: {result.stderr[:200]}")
+        log(f"   ⚠️  sync error (returncode {result.returncode}) — ดู log ด้านบนสำหรับรายละเอียด")
         return False
     return True
 

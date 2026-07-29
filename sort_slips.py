@@ -152,8 +152,10 @@ def run() -> dict:
         "--include", "*.JPG", "--include", "*.JPEG",
         "--include", "*.PNG", "--include", "*.WEBP",
         "--transfers", "8", "--checkers", "16",
+        "--stats", "30s", "-v",
         "--config", str(Path.home() / ".config/rclone/rclone.conf"),
     ])  # ไม่ใส่ timeout ตั้งใจ — เน็ต Pi ช้า ยอมรอเท่าไหร่ก็รอ (ดู MAX_RUNNING_SECONDS ใน telegram_bot.py เป็น safety net แทน)
+    # --stats 30s -v พิมพ์ % progress เป็นระยะ (ไม่ capture_output จะได้เห็น log สดๆ)
     local_images = [f for f in sorted(local_raw.iterdir()) if f.suffix.lower() in IMAGE_EXTS]
     log(f"   ✅ copy {len(local_images)} รูปเสร็จ")
 
