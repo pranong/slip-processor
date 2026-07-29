@@ -151,7 +151,8 @@ def run() -> dict:
         "--include", "*.png", "--include", "*.webp",
         "--include", "*.JPG", "--include", "*.JPEG",
         "--include", "*.PNG", "--include", "*.WEBP",
-        "--transfers", "8", "--checkers", "16",
+        "--transfers", "16", "--checkers", "32",
+        "--fast-list",
         "--stats", "30s", "-v",
         "--config", str(Path.home() / ".config/rclone/rclone.conf"),
     ])  # ไม่ใส่ timeout ตั้งใจ — เน็ต Pi ช้า ยอมรอเท่าไหร่ก็รอ (ดู MAX_RUNNING_SECONDS ใน telegram_bot.py เป็น safety net แทน)

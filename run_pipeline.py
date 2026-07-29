@@ -45,7 +45,8 @@ def clear_raw_files():
         "--filter", "+ *.PNG",
         "--filter", "+ *.WEBP",
         "--filter", "- *",
-        "--checkers", "16",
+        "--checkers", "32",
+        "--fast-list",
         "--config", str(Path.home() / ".config/rclone/rclone.conf"),
     ], capture_output=True, text=True)
     if result.returncode == 0:
@@ -73,7 +74,8 @@ def sync_to_drive(local_dir: str) -> bool:
         "rclone", "copy", str(base),
         "gdrive:SlipProcessor/data",
         "--ignore-times",
-        "--transfers", "8", "--checkers", "16",
+        "--transfers", "16", "--checkers", "32",
+        "--fast-list",
         "--stats", "30s", "-v",
         "--config", str(Path.home() / ".config/rclone/rclone.conf"),
     ])
