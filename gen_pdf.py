@@ -612,7 +612,7 @@ if __name__ == "__main__":
         scope_type, scope_value = args.regen
         log(f"♻️  Regen mode: {scope_type} = {scope_value}")
 
-        from state import load_state, save_state, reset_state
+        from utils.state import load_state, save_state, reset_state
         state = load_state()
         count = reset_state(state, scope_value)
         save_state(state)
