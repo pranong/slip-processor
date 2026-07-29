@@ -145,14 +145,18 @@ def run() -> dict:
     local_raw.mkdir(parents=True)
     log("   📥 copy รูปมา local...")
     import subprocess
-    subprocess.run([
-        "rclone", "copy", "gdrive:SlipProcessor/rawFile", str(local_raw),
-        "--include", "*.jpg", "--include", "*.jpeg",
-        "--include", "*.png", "--include", "*.webp",
-        "--include", "*.JPG", "--include", "*.JPEG",
-        "--include", "*.PNG", "--include", "*.WEBP",
-        "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-    ])
+    try:
+        subprocess.run([
+            "rclone", "copy", "gdrive:SlipProcessor/rawFile", str(local_raw),
+            "--include", "*.jpg", "--include", "*.jpeg",
+            "--include", "*.png", "--include", "*.webp",
+            "--include", "*.JPG", "--include", "*.JPEG",
+            "--include", "*.PNG", "--include", "*.WEBP",
+            "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+        ], timeout=300)
+    except subprocess.TimeoutExpired:
+        log("❌ rclone copy rawFile ค้างเกิน 5 นาที — เช็ค mount/network")
+        return {"new": 0, "duplicate": 0, "no_note": 0, "invalid": 0}
     local_images = [f for f in sorted(local_raw.iterdir()) if f.suffix.lower() in IMAGE_EXTS]
     log(f"   ✅ copy {len(local_images)} รูปเสร็จ")
 

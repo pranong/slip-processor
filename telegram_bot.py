@@ -20,6 +20,8 @@ from config.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, RAW_MOUNT, DATA_
 API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 OFFSET  = 0
 RUNNING = False
+RUNNING_SINCE = None
+MAX_RUNNING_SECONDS = 30 * 60  # ค้างเกินนี้ถือว่า stuck (mount/rclone หลุดแบบไม่ raise) ปลดล็อกอัตโนมัติ
 LOCK    = threading.Lock()
 
 
@@ -167,9 +169,10 @@ def do_run(cmd: str):
         send(f"❌ เกิดข้อผิดพลาด\n<code>{e}</code>")
         log(traceback.format_exc())
     finally:
-        global RUNNING
+        global RUNNING, RUNNING_SINCE
         with LOCK:
             RUNNING = False
+            RUNNING_SINCE = None
 
 
 def reset_pdf_generated(path_filter: str) -> int:
@@ -201,18 +204,24 @@ def do_regen(scope: str):
         send(f"❌ เกิดข้อผิดพลาด\n<code>{e}</code>")
         log(traceback.format_exc())
     finally:
-        global RUNNING
+        global RUNNING, RUNNING_SINCE
         with LOCK:
             RUNNING = False
+            RUNNING_SINCE = None
 
 
 def run_command(cmd: str, extra: str = ""):
-    global RUNNING
+    global RUNNING, RUNNING_SINCE
     with LOCK:
         if RUNNING:
-            send("⚠️ กำลังรันอยู่แล้ว รอให้เสร็จก่อนนะครับ")
-            return
+            stuck_for = time.time() - RUNNING_SINCE if RUNNING_SINCE else 0
+            if stuck_for < MAX_RUNNING_SECONDS:
+                send("⚠️ กำลังรันอยู่แล้ว รอให้เสร็จก่อนนะครับ")
+                return
+            log(f"⚠️  RUNNING ค้างเกิน {MAX_RUNNING_SECONDS}s (น่าจะ mount/rclone แฮงค์) — ปลดล็อกอัตโนมัติ")
+            send("⚠️ รอบก่อนค้างนานผิดปกติ (mount/rclone อาจแฮงค์) — ปลดล็อกแล้วรันรอบใหม่ให้")
         RUNNING = True
+        RUNNING_SINCE = time.time()
 
     if cmd in ("/genyear", "/genmonth", "/genday"):
         t = threading.Thread(target=do_regen, args=(extra,), daemon=True)

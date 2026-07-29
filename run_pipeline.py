@@ -33,19 +33,23 @@ def setup_logging():
 
 def clear_raw_files():
     import subprocess
-    result = subprocess.run([
-        "rclone", "delete", "gdrive:SlipProcessor/rawFile",
-        "--filter", "+ *.jpg",
-        "--filter", "+ *.jpeg", 
-        "--filter", "+ *.png",
-        "--filter", "+ *.webp",
-        "--filter", "+ *.JPG",
-        "--filter", "+ *.JPEG",
-        "--filter", "+ *.PNG",
-        "--filter", "+ *.WEBP",
-        "--filter", "- *",
-        "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-    ], capture_output=True, text=True)
+    try:
+        result = subprocess.run([
+            "rclone", "delete", "gdrive:SlipProcessor/rawFile",
+            "--filter", "+ *.jpg",
+            "--filter", "+ *.jpeg",
+            "--filter", "+ *.png",
+            "--filter", "+ *.webp",
+            "--filter", "+ *.JPG",
+            "--filter", "+ *.JPEG",
+            "--filter", "+ *.PNG",
+            "--filter", "+ *.WEBP",
+            "--filter", "- *",
+            "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+        ], capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        log("⚠️  ลบ rawFile ค้างเกิน 2 นาที — เช็ค mount/network")
+        return 0
     if result.returncode == 0:
         log("🗑️  ลบรูปใน rawFile เสร็จแล้ว")
     else:
@@ -167,22 +171,28 @@ def main():
     # 3a. upload metadata + images จาก sort
     if local_data:
         log("\n── Sync data ──")
-        subprocess.run([
-            "rclone", "copy", local_data,
-            "gdrive:SlipProcessor/data",
-            "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-        ], capture_output=True)
-        log("   ✅ data synced")
+        try:
+            subprocess.run([
+                "rclone", "copy", local_data,
+                "gdrive:SlipProcessor/data",
+                "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+            ], capture_output=True, timeout=300)
+            log("   ✅ data synced")
+        except subprocess.TimeoutExpired:
+            log("   ⚠️  sync data ค้างเกิน 5 นาที — เช็ค mount/network")
 
     # 3b. upload PDFs จาก gen
     if local_output:
         log("\n── Sync PDFs ──")
-        subprocess.run([
-            "rclone", "copy", local_output,
-            "gdrive:SlipProcessor/data",
-            "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-        ], capture_output=True)
-        log("   ✅ PDFs synced")
+        try:
+            subprocess.run([
+                "rclone", "copy", local_output,
+                "gdrive:SlipProcessor/data",
+                "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+            ], capture_output=True, timeout=300)
+            log("   ✅ PDFs synced")
+        except subprocess.TimeoutExpired:
+            log("   ⚠️  sync PDFs ค้างเกิน 5 นาที — เช็ค mount/network")
 
     # 3c. clear rawFile
     log("\n── ขั้นตอน 3: clear rawFile ──")

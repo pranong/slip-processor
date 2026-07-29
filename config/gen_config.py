@@ -13,6 +13,11 @@ NOTE_ROUTES = [
         "template":  "ใบรับรองแทนใบเสร็จรับเงินบริษัท.docx",
     },
     {
+        "keyword":   "อวน",
+        "subfolder": "uan",
+        "template":  "ใบรับรองแทนใบเสร็จรับเงินบริษัท.docx",
+    },
+    {
         "keyword":   "ceramic",
         "subfolder": "ceramic",
         "template":  "ใบรับรองแทนใบเสร็จรับเงินบริษัท.docx",
