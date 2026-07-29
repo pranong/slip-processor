@@ -145,19 +145,15 @@ def run() -> dict:
     local_raw.mkdir(parents=True)
     log("   📥 copy รูปมา local...")
     import subprocess
-    try:
-        subprocess.run([
-            "rclone", "copy", "gdrive:SlipProcessor/rawFile", str(local_raw),
-            "--include", "*.jpg", "--include", "*.jpeg",
-            "--include", "*.png", "--include", "*.webp",
-            "--include", "*.JPG", "--include", "*.JPEG",
-            "--include", "*.PNG", "--include", "*.WEBP",
-            "--transfers", "8", "--checkers", "16",
-            "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-        ], timeout=1800)
-    except subprocess.TimeoutExpired:
-        log("❌ rclone copy rawFile ค้างเกิน 30 นาที — เช็ค mount/network")
-        return {"new": 0, "duplicate": 0, "no_note": 0, "invalid": 0}
+    subprocess.run([
+        "rclone", "copy", "gdrive:SlipProcessor/rawFile", str(local_raw),
+        "--include", "*.jpg", "--include", "*.jpeg",
+        "--include", "*.png", "--include", "*.webp",
+        "--include", "*.JPG", "--include", "*.JPEG",
+        "--include", "*.PNG", "--include", "*.WEBP",
+        "--transfers", "8", "--checkers", "16",
+        "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+    ])  # ไม่ใส่ timeout ตั้งใจ — เน็ต Pi ช้า ยอมรอเท่าไหร่ก็รอ (ดู MAX_RUNNING_SECONDS ใน telegram_bot.py เป็น safety net แทน)
     local_images = [f for f in sorted(local_raw.iterdir()) if f.suffix.lower() in IMAGE_EXTS]
     log(f"   ✅ copy {len(local_images)} รูปเสร็จ")
 

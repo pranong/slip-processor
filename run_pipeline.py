@@ -57,32 +57,29 @@ def clear_raw_files():
     return 0
 
 
-def sync_to_drive(local_dir: str, timeout: int = 1800) -> bool:
+def sync_to_drive(local_dir: str) -> bool:
     """
     Upload local_dir ขึ้น Drive (`gdrive:SlipProcessor/data`) — copy ก้อนเดียว (--ignore-times
     บังคับทับไฟล์เดิมเสมอ เผื่อ regen แล้วขนาด/เวลาเผอิญตรงกัน)
-    timeout ยาวเท่ากับตอนโหลด rawFile (เน็ต Pi ช้า ~150-200 KB/s เป็นปกติ ไม่ใช่ค้าง)
-    return True = sync สำเร็จจริง, False = timeout/error — ห้ามให้ caller ทำ clear_raw_files()
+    ไม่ใส่ timeout ตั้งใจ — เน็ต Pi ช้า ยอมรอเท่าไหร่ก็รอ (ดู MAX_RUNNING_SECONDS ใน telegram_bot.py
+    เป็น safety net กันเคสค้างจริงแทน ที่ระดับ command ไม่ใช่ระดับ subprocess)
+    return True = sync สำเร็จจริง (returncode 0), False = error — ห้ามให้ caller ทำ clear_raw_files()
     หรือบันทึก transactions ต่อถ้า return False เพราะไฟล์อาจยังไม่ครบบน Drive
     """
     import subprocess
     base = Path(local_dir)
     if not base.exists():
         return True
-    try:
-        result = subprocess.run([
-            "rclone", "copy", str(base),
-            "gdrive:SlipProcessor/data",
-            "--ignore-times",
-            "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-        ], capture_output=True, timeout=timeout)
-        if result.returncode != 0:
-            log(f"   ⚠️  sync error: {result.stderr[:200]}")
-            return False
-        return True
-    except subprocess.TimeoutExpired:
-        log(f"   ⚠️  sync ค้างเกิน {timeout} วิ — เช็ค mount/network")
+    result = subprocess.run([
+        "rclone", "copy", str(base),
+        "gdrive:SlipProcessor/data",
+        "--ignore-times",
+        "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+    ], capture_output=True)
+    if result.returncode != 0:
+        log(f"   ⚠️  sync error: {result.stderr[:200]}")
         return False
+    return True
 
 
 # alias เดิม (ใช้ใน gen_pdf.py --regen)
