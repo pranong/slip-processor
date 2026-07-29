@@ -75,6 +75,7 @@ def sync_to_drive(local_dir: str) -> bool:
         "rclone", "copy", str(base),
         "gdrive:SlipProcessor/data",
         "--ignore-times",
+        "--transfers", "8", "--checkers", "16",
         "--stats", "30s", "-v",
         "--config", str(Path.home() / ".config/rclone/rclone.conf"),
     ])
