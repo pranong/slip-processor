@@ -11,6 +11,7 @@ cd "$CODE" || exit 1
 
 LOG="/tmp/run_$(date +%Y%m%d_%H%M%S).log"
 
+export SLIP_PIPELINE_DETACHED=1  # กัน run_pipeline.py re-exec กลับมาเรียกสคริปต์นี้ซ้ำเป็นวงไม่รู้จบ
 setsid nohup python3 run_pipeline.py > "$LOG" 2>&1 < /dev/null &
 PID=$!
 disown

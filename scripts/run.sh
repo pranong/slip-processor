@@ -6,6 +6,7 @@ CODE="/app/uan/slip-processor"
 MOUNT="/home/pi/slip-processor"
 cd "$CODE"
 export ANTHROPIC_API_KEY=$(python3 -c "from config.config import ANTHROPIC_API_KEY; print(ANTHROPIC_API_KEY)")
+export SLIP_PIPELINE_DETACHED=1  # cron รันแบบไม่มี terminal อยู่แล้ว ไม่ต้อง re-exec ผ่าน run_safe.sh ซ้ำ (จะได้รอจบแบบ synchronous เหมือนเดิม)
 
 echo ""
 echo "========================================"

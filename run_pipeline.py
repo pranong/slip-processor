@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from config.config import RAW_MOUNT, DATA_MOUNT, LOG_DIR, IMAGE_EXTS
+from config.config import RAW_MOUNT, DATA_MOUNT, LOG_DIR, IMAGE_EXTS, CODE_DIR
 import sort_slips
 import gen_pdf
 from utils import notify as notify
@@ -65,12 +65,12 @@ def sync_to_drive(local_dir: str) -> bool:
     return True = sync สำเร็จจริง (returncode 0), False = error — ห้ามให้ caller ทำ clear_raw_files()
     หรือบันทึก transactions ต่อถ้า return False เพราะไฟล์อาจยังไม่ครบบน Drive
     """
-    import subprocess
+    import subprocess, re, time
     base = Path(local_dir)
     if not base.exists():
         return True
-    # ไม่ capture_output เพื่อให้ --stats พิมพ์ % progress ออกมาเป็นระยะระหว่างรัน (โผล่ใน log ตรงๆ)
-    result = subprocess.run([
+
+    cmd = [
         "rclone", "copy", str(base),
         "gdrive:SlipProcessor/data",
         "--ignore-times",
@@ -78,9 +78,28 @@ def sync_to_drive(local_dir: str) -> bool:
         "--fast-list",
         "--stats", "30s", "-v",
         "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-    ])
-    if result.returncode != 0:
-        log(f"   ⚠️  sync error (returncode {result.returncode}) — ดู log ด้านบนสำหรับรายละเอียด")
+    ]
+    # อ่าน output สดๆ ทีละบรรทัด (ไม่ capture_output) เพื่อดึง progress "Transferred: X / Y, Z%"
+    # ส่งเข้า Telegram เป็นระยะ (throttle กันสแปม) — ใช้ร่วมกันทั้งสั่งจาก SSH และ Telegram เพราะจุดนี้จุดเดียว
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    file_progress = re.compile(r"Transferred:\s+(\d+)\s*/\s*(\d+),\s*(\d+)%")
+    last_notify_t, last_pct = 0.0, -1
+    for line in proc.stdout:
+        line = line.rstrip()
+        if line:
+            log(line)
+        m = file_progress.search(line)
+        if not m:
+            continue
+        done, total, pct = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        now = time.time()
+        if total and (now - last_notify_t >= 120 or pct - last_pct >= 20 or done == total):
+            notify.send(f"🔄 sync: {done}/{total} ({pct}%)")
+            last_notify_t, last_pct = now, pct
+    proc.wait()
+
+    if proc.returncode != 0:
+        log(f"   ⚠️  sync error (returncode {proc.returncode}) — ดู log ด้านบนสำหรับรายละเอียด")
         return False
     return True
 
@@ -264,4 +283,11 @@ def main():
 
 
 if __name__ == "__main__":
+    import os
+    if os.environ.get("SLIP_PIPELINE_DETACHED") != "1":
+        # รันตรงๆ ผ่าน `python3 run_pipeline.py` ให้ re-exec ไปทาง scripts/run_safe.sh อัตโนมัติ
+        # กัน SSH หลุดแล้วโดน SIGHUP ฆ่าทิ้งกลางทาง (เหมือนที่เคยเกิดตอน sync) — พิมพ์คำสั่งเดียว ไม่ต้องจำ 2 แบบ
+        # Telegram bot เรียก main() ตรงๆ ไม่ผ่าน __main__ นี้ เลยไม่โดน re-exec ซ้ำ ทำงานเหมือนเดิม
+        script = str(Path(CODE_DIR) / "scripts" / "run_safe.sh")
+        os.execvp("bash", ["bash", script])
     main()
