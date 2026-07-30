@@ -599,7 +599,8 @@ def run(local_data_path: str | None = None) -> dict:
 
 
 if __name__ == "__main__":
-    import argparse
+    import argparse, time
+    from run_pipeline import fmt_duration
 
     parser = argparse.ArgumentParser(description="Gen PDF ใบรับรองแทนใบเสร็จรับเงิน")
     parser.add_argument(
@@ -620,23 +621,34 @@ if __name__ == "__main__":
         save_state(state)
         log(f"   Reset {count} groups — กำลัง gen...\n")
 
+    t_total = time.time()
+
+    t0 = time.time()
     result = run()
+    gen_elapsed = fmt_duration(time.time() - t0)
 
     # ── sync local_output (PDF) ขึ้น Drive ──
     local_output = result.get("_local_output")
     pdf_ok = True
+    sync_elapsed = "0 วิ"
     if local_output:
         log("\n── Sync PDFs ขึ้น Drive ──")
+        t0 = time.time()
         from run_pipeline import sync_output_dir
         pdf_ok = sync_output_dir(local_output)
+        sync_elapsed = fmt_duration(time.time() - t0)
         log("   ✅ PDFs synced" if pdf_ok else "   ❌ sync PDFs ล้มเหลว — ข้ามบันทึก transactions")
 
     # ── บันทึก transactions ลง Google Sheets (หลัง sync เสร็จ) ──
+    from utils import notify
     pending = result.get("_pending_transactions", []) if pdf_ok else []
+    t0 = time.time()
     if pending:
         log(f"\n── บันทึก Transactions ({len(pending)} groups) ──")
+        notify.send(f"📊 กำลัง update transaction sheet ({len(pending)} groups)...")
         from utils.transactions import append_transactions
-        for item in pending:
+        for i, item in enumerate(pending, 1):
+            log(f"   📦 [{i}/{len(pending)}] category={item['category']} cert={item['cert_filename']} receipts={list(item['receipt_filenames'].keys())}")
             try:
                 append_transactions(
                     slips=item["slips"],
@@ -646,3 +658,15 @@ if __name__ == "__main__":
                 )
             except Exception as e:
                 log(f"   ⚠️  บันทึก transactions ไม่ได้: {e}")
+    tx_elapsed = fmt_duration(time.time() - t0)
+    total_elapsed = fmt_duration(time.time() - t_total)
+
+    notify.send(
+        f"✅ Pipeline เสร็จสิ้น (gen_pdf.py)\n"
+        f"📄 gen ใหม่: {result.get('new', 0)}  ❌ ล้มเหลว: {result.get('failed', 0)}\n"
+        f"⏱ Gen: {gen_elapsed}\n"
+        f"🔄 Sync: {sync_elapsed}\n"
+        f"📊 Transactions: {tx_elapsed} ({len(pending)} groups)\n"
+        f"⏱ รวม: {total_elapsed}"
+    )
+    log(f"\n✅ เสร็จสิ้น — รวม {total_elapsed}")

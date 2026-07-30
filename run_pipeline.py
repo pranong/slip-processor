@@ -245,15 +245,17 @@ def main():
 
     # 3c. clear rawFile (ทำเฉพาะตอน sync สำเร็จจริงเท่านั้น กันรูปต้นฉบับหายทั้งที่ยังไม่ขึ้น Drive)
     log("\n── ขั้นตอน 3: clear rawFile ──")
+    notify.send("🗑 กำลังลบ rawFile...")
     clear_raw_files()
 
     # ── 4. บันทึก transactions ลง Google Sheets (หลัง sync เสร็จ ไฟล์มีบน Drive แล้ว) ──
     pending = gen_result.get("_pending_transactions", [])
     log(f"\n── บันทึก Transactions ({len(pending)} groups) ──")
     if pending:
+        notify.send(f"📊 กำลัง update transaction sheet ({len(pending)} groups)...")
         from utils.transactions import append_transactions
-        for item in pending:
-            log(f"   📦 category={item['category']} cert={item['cert_filename']} receipts={list(item['receipt_filenames'].keys())}")
+        for i, item in enumerate(pending, 1):
+            log(f"   📦 [{i}/{len(pending)}] category={item['category']} cert={item['cert_filename']} receipts={list(item['receipt_filenames'].keys())}")
             try:
                 append_transactions(
                     slips=item["slips"],

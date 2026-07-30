@@ -6,6 +6,7 @@ utils/transactions.py — บันทึก transaction ลง Google Sheets
 import gspread
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
+from utils.logger import log
 from config.config import (
     GSHEET_CREDENTIALS, TRANSACTIONS_SHEET_ID, TRANSACTIONS_SHEET_NAME
 )
@@ -83,12 +84,12 @@ def clear_transactions():
                 if requests:
                     sh.batch_update({"requests": requests})
         except Exception as e:
-            print(f"    ⚠️  ลบ filter views ไม่ได้: {e}")
+            log(f"    ⚠️  ลบ filter views ไม่ได้: {e}")
 
         ensure_header(ws)
-        print("✅ Clear Transactions Sheet เสร็จแล้ว (รวม filter/format)")
+        log("✅ Clear Transactions Sheet เสร็จแล้ว (รวม filter/format)")
     except Exception as e:
-        print(f"❌ Clear Transactions Sheet ไม่ได้: {e}")
+        log(f"❌ Clear Transactions Sheet ไม่ได้: {e}")
 
 
 SLIP_PROCESSOR_FOLDER = None  # cache folder ID
@@ -133,23 +134,23 @@ def _get_drive_link_by_name(drive_client, filename: str) -> str:
         files = result.get("files", [])
         if len(files) == 1:
             url = files[0].get("webViewLink", "")
-            print(f"      🔗 พบไฟล์ '{filename}' → {url}")
+            log(f"      🔗 พบไฟล์ '{filename}' → {url}")
             return url
         elif len(files) > 1 and root_id:
             # หลายไฟล์ชื่อเดียวกัน — เลือกอันที่อยู่ใน SlipProcessor
             for f in files:
                 if _is_in_folder(drive_client, f.get("id", ""), root_id):
                     url = f.get("webViewLink", "")
-                    print(f"      🔗 พบไฟล์ '{filename}' (filtered) → {url}")
+                    log(f"      🔗 พบไฟล์ '{filename}' (filtered) → {url}")
                     return url
             # ถ้าหาไม่เจอใน folder ก็ return ตัวแรก
             url = files[0].get("webViewLink", "")
-            print(f"      🔗 พบไฟล์ '{filename}' (fallback) → {url}")
+            log(f"      🔗 พบไฟล์ '{filename}' (fallback) → {url}")
             return url
         else:
-            print(f"      ❌ ไม่พบไฟล์ '{filename}' บน Drive")
+            log(f"      ❌ ไม่พบไฟล์ '{filename}' บน Drive")
     except Exception as e:
-        print(f"      ⚠️  Drive link error ({filename}): {e}")
+        log(f"      ⚠️  Drive link error ({filename}): {e}")
     return ""
 
 
@@ -168,6 +169,14 @@ def _is_in_folder(drive_client, file_id: str, target_folder_id: str, depth: int 
         except Exception:
             return False
     return False
+
+
+def _norm_amount(val) -> float | None:
+    """แปลงเป็นตัวเลขมาตรฐานสำหรับเทียบ key — กัน '11,155' (ที่ Sheets แสดงมีลูกน้ำ) ไม่ match กับ 11155"""
+    try:
+        return round(float(str(val).replace(",", "")), 2)
+    except (ValueError, TypeError):
+        return None
 
 
 def append_transactions(slips: list[dict], category: str,
@@ -191,7 +200,7 @@ def append_transactions(slips: list[dict], category: str,
     except Exception as e:
         # retry 1 ครั้งกรณี Google API ชั่วคราวล่ม (503)
         import time
-        print(f"    ⚠️  เปิด Sheet ไม่สำเร็จ ({e}) — retry ใน 5 วิ...")
+        log(f"    ⚠️  เปิด Sheet ไม่สำเร็จ ({e}) — retry ใน 5 วิ...")
         time.sleep(5)
         try:
             gc, drive = _get_clients()
@@ -199,36 +208,28 @@ def append_transactions(slips: list[dict], category: str,
             ws = sh.worksheet(TRANSACTIONS_SHEET_NAME)
             ensure_header(ws)
         except Exception as e2:
-            print(f"    ❌ เปิด Transactions Sheet ไม่ได้ (retry แล้ว): {e2}")
+            log(f"    ❌ เปิด Transactions Sheet ไม่ได้ (retry แล้ว): {e2}")
             return
 
     cert_url_raw = _get_drive_link_by_name(drive, cert_filename) if cert_filename else ""
     cert_url = f'=HYPERLINK("{cert_url_raw}","{cert_filename}")' if cert_url_raw else ""
 
-    # ── ลบ row เดิมที่มี date + category เดียวกัน (batch แทนทีละ row) ──
+    # ── โหลด row ที่มีอยู่แล้ว จับคู่ (date, category, vendor_name, note, amount) → เลข row จริงบน Sheet ──
+    # เจอ key เดิม = update ทับแถวนั้น ไม่ใช่ลบทั้ง bucket แล้ว append ใหม่
     try:
         all_values = ws.get_all_values()
-        if len(all_values) > 1:
-            first = slips[0] if slips else {}
-            day   = first.get("day", "")
-            month = first.get("month", "")
-            year  = first.get("year_ce", "")
-            target_date = f"{year}-{month:02d}-{day:02d}" if (day and month and year) else ""
-
-            header = all_values[0]
-            keep_rows = [row for row in all_values[1:]
-                         if not (len(row) >= 2 and row[0] == target_date and row[1] == category)]
-            removed = len(all_values) - 1 - len(keep_rows)
-            if removed > 0:
-                ws.clear()
-                ws.append_row(header, value_input_option="USER_ENTERED")
-                if keep_rows:
-                    ws.append_rows(keep_rows, value_input_option="USER_ENTERED")
-                print(f"    🗑️  ลบ {removed} rows เดิม ({target_date}/{category})")
     except Exception as e:
-        print(f"    ⚠️  dedup error: {e}")
+        log(f"    ❌ อ่าน Sheet ไม่ได้: {e}")
+        return
+    existing_rows = {}
+    for row_num, row in enumerate(all_values[1:], start=2):  # แถว 1 = header, sheet เริ่ม index 2
+        if len(row) >= 5:
+            amt = _norm_amount(row[4])
+            if amt is not None:
+                existing_rows[(row[0], row[1], row[2], row[3], amt)] = row_num
 
-    rows = []
+    updates  = []  # (row_num, values)
+    new_rows = []
     for slip in slips:
         day   = slip.get("day", "")
         month = slip.get("month", "")
@@ -255,11 +256,27 @@ def append_transactions(slips: list[dict], category: str,
 
         has_receipt = "TRUE" if receipt_url_raw else "FALSE"
 
-        rows.append([
-            date_str, category, vendor_name,
-            note, amount, has_receipt, img_url, cert_url, receipt_url,
-        ])
+        row = [date_str, category, vendor_name,
+               note, amount, has_receipt, img_url, cert_url, receipt_url]
 
-    if rows:
-        ws.append_rows(rows, value_input_option="USER_ENTERED")
-        print(f"    ✅ บันทึก {len(rows)} transactions ลง Sheets")
+        key = (date_str, category, vendor_name, note, _norm_amount(amount))
+        if key in existing_rows:
+            updates.append((existing_rows[key], row))
+        else:
+            new_rows.append(row)
+
+    if updates:
+        try:
+            batch = [{"range": f"A{row_num}:I{row_num}", "values": [row]} for row_num, row in updates]
+            ws.batch_update(batch, value_input_option="USER_ENTERED")
+            log(f"    🔄 update {len(updates)} rows เดิม")
+        except Exception as e:
+            log(f"    ❌ update rows ไม่สำเร็จ: {e}")
+            return
+
+    if new_rows:
+        ws.append_rows(new_rows, value_input_option="USER_ENTERED")
+        log(f"    ✅ เพิ่ม {len(new_rows)} rows ใหม่")
+
+    if not updates and not new_rows:
+        log("    ℹ️  ไม่มี transaction ให้บันทึก")
