@@ -724,13 +724,19 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    from utils import notify
+
     if args.transactions_only:
         sync_transactions_only(args.transactions_only)
         raise SystemExit(0)
 
+    local_data_root = None
+    local_data_path = None
+
     if args.regen:
         scope_type, scope_value = args.regen
         log(f"♻️  Regen mode: {scope_type} = {scope_value}")
+        notify.send(f"🚀 Regen เริ่มแล้ว — scope: {scope_value}")
 
         from utils.state import load_state, save_state, reset_state
         state = load_state()
@@ -738,11 +744,31 @@ if __name__ == "__main__":
         save_state(state)
         log(f"   Reset {count} groups — กำลัง gen...\n")
 
+        # ── local staging: copy แค่ folder "metadata/" ของ scope นี้มา local ก่อน (เร็วกว่าอ่านจาก
+        # mount ทีละไฟล์) — ไม่เอา images/PDF เก่า/summary.json เพราะ gen_pdf.py ไม่ใช้เลย ──
+        import tempfile
+        local_data_root = Path(tempfile.mkdtemp()) / "regen_data"
+        log(f"📥 copy metadata scope={scope_value} มา local...")
+        notify.send("📥 กำลัง copy metadata...")
+        subprocess.run([
+            "rclone", "copy", f"gdrive:SlipProcessor/data/{scope_value}",
+            str(local_data_root / scope_value),
+            "--include", "**/metadata/**",
+            "--transfers", "16", "--checkers", "32", "--fast-list",
+            "--stats", "30s", "-v",
+            "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+        ])
+        notify.send("✅ copy metadata เสร็จแล้ว")
+        local_data_path = str(local_data_root)
+
     t_total = time.time()
 
+    log("\n── กำลัง gen PDF ──")
+    notify.send("📄 กำลัง gen PDF...")
     t0 = time.time()
-    result = run()
+    result = run(local_data_path=local_data_path)
     gen_elapsed = fmt_duration(time.time() - t0)
+    notify.send(f"✅ gen PDF เสร็จแล้ว ({gen_elapsed})")
 
     # ── sync local_output (PDF) ขึ้น Drive ──
     local_output = result.get("_local_output")
@@ -750,14 +776,15 @@ if __name__ == "__main__":
     sync_elapsed = "0 วิ"
     if local_output:
         log("\n── Sync PDFs ขึ้น Drive ──")
+        notify.send("🔄 กำลัง sync PDF ขึ้น Drive...")
         t0 = time.time()
         from run_pipeline import sync_output_dir
         pdf_ok = sync_output_dir(local_output)
         sync_elapsed = fmt_duration(time.time() - t0)
         log("   ✅ PDFs synced" if pdf_ok else "   ❌ sync PDFs ล้มเหลว — ข้ามบันทึก transactions")
+        notify.send(f"✅ sync PDF เสร็จแล้ว ({sync_elapsed})" if pdf_ok else "❌ sync PDF ล้มเหลว — ข้ามบันทึก transactions")
 
     # ── บันทึก transactions ลง Google Sheets (หลัง sync เสร็จ) ──
-    from utils import notify
     pending = result.get("_pending_transactions", []) if pdf_ok else []
     t0 = time.time()
     if pending:
@@ -787,3 +814,10 @@ if __name__ == "__main__":
         f"⏱ รวม: {total_elapsed}"
     )
     log(f"\n✅ เสร็จสิ้น — รวม {total_elapsed}")
+
+    # ── cleanup temp files ──
+    import shutil as _shutil
+    if local_data_root:
+        _shutil.rmtree(local_data_root, ignore_errors=True)
+    if local_output:
+        _shutil.rmtree(local_output, ignore_errors=True)
