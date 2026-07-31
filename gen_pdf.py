@@ -598,6 +598,103 @@ def run(local_data_path: str | None = None) -> dict:
     return results
 
 
+def sync_transactions_only(scope: str) -> dict:
+    """
+    บันทึก transactions ลง Sheets ใหม่จาก metadata ที่มีอยู่แล้ว โดย**ไม่ gen PDF ใหม่**
+    (คำนวณชื่อไฟล์ cert/receipt ตาม naming convention เดิม แล้วให้ append_transactions()
+    ไปหา Drive link เอาเอง — ใช้ตอน PDF/รูปอยู่บน Drive ครบแล้ว แค่ Sheets ไม่ update
+    เช่น service account เพิ่งโดนลดสิทธิ์เป็น Viewer ตอน gen รอบก่อน)
+
+    scope: "2026" / "2026/JUN" / "2026/JUN/15"
+    """
+    data_root = Path(DATA_MOUNT)
+    scope_parts = scope.strip("/").split("/")
+    scope_year  = scope_parts[0] if len(scope_parts) >= 1 else None
+    scope_month = scope_parts[1] if len(scope_parts) >= 2 else None
+    scope_day   = scope_parts[2] if len(scope_parts) >= 3 else None
+
+    vendors = load_vendors(force_reload=True)
+    from utils.transactions import append_transactions
+    groups_done = 0
+
+    for year_dir in sorted(data_root.iterdir()):
+        if not year_dir.is_dir() or year_dir.name in ("unclassified", "backups", "logs"):
+            continue
+        if scope_year and year_dir.name != scope_year:
+            continue
+
+        for month_dir in sorted(year_dir.iterdir()):
+            if not month_dir.is_dir():
+                continue
+            if scope_month and month_dir.name != scope_month:
+                continue
+
+            for day_dir in sorted(month_dir.iterdir()):
+                if not day_dir.is_dir():
+                    continue
+                if scope_day and day_dir.name != scope_day:
+                    continue
+
+                images_dir   = day_dir / "images"
+                metadata_dir = day_dir / "metadata"
+                if not images_dir.exists() and not metadata_dir.exists():
+                    continue
+
+                json_dir = metadata_dir if metadata_dir.exists() else images_dir
+                all_slips = []
+                for jf in sorted(json_dir.glob("*.json")):
+                    try:
+                        all_slips.append(json.loads(jf.read_text(encoding="utf-8")))
+                    except Exception as e:
+                        log(f"    ⚠️  อ่าน {jf.name} ไม่ได้: {e}")
+
+                if not all_slips:
+                    continue
+
+                groups: dict[str, list] = {}
+                for s in all_slips:
+                    note = s.get("note") or ""
+                    sf   = get_route(note)["subfolder"]
+                    groups.setdefault(sf, []).append(s)
+
+                date_prefix = f"{year_dir.name}{MONTH_MAP_NUM.get(month_dir.name, '00')}{day_dir.name}"
+
+                for sf, group_slips in groups.items():
+                    cert_filename = f"{date_prefix}-ใบรับรองแทนใบเสร็จรับเงิน.pdf"
+
+                    from collections import defaultdict
+                    slips_by_vendor: dict[str, list] = defaultdict(list)
+                    for s in group_slips:
+                        to_name = s.get("to_name") or s.get("to_account", "")
+                        slips_by_vendor[to_name].append(s)
+
+                    receipt_filenames = {}
+                    for to_name, vendor_slips in slips_by_vendor.items():
+                        vendor = find_vendor(to_name, vendors)
+                        if vendor is None:
+                            continue
+                        for s in vendor_slips:
+                            s["vendor"] = vendor
+                        safe_name = to_name.replace("/", "-").replace("\\", "-")
+                        receipt_filenames[to_name] = f"{date_prefix}-{safe_name}.pdf"
+
+                    log(f"   📦 {year_dir.name}/{month_dir.name}/{day_dir.name}/{sf} "
+                        f"— {len(group_slips)} slips, cert={cert_filename}")
+                    try:
+                        append_transactions(
+                            slips=group_slips,
+                            category=sf,
+                            cert_filename=cert_filename,
+                            receipt_filenames=receipt_filenames,
+                        )
+                        groups_done += 1
+                    except Exception as e:
+                        log(f"   ⚠️  บันทึก transactions ไม่ได้: {e}")
+
+    log(f"\n✅ บันทึก transactions {groups_done} groups")
+    return {"groups": groups_done}
+
+
 if __name__ == "__main__":
     import argparse, time
     from run_pipeline import fmt_duration
@@ -609,7 +706,16 @@ if __name__ == "__main__":
         metavar=("SCOPE", "VALUE"),
         help="regen โดย bypass ตัวเช็ค เช่น --regen year 2026 | --regen month 2026/JUN | --regen day 2026/JUN/24"
     )
+    parser.add_argument(
+        "--transactions-only",
+        metavar="SCOPE",
+        help='บันทึก transactions ใหม่จาก metadata ที่มีอยู่แล้ว ไม่ gen PDF ใหม่ เช่น --transactions-only 2026/JUN'
+    )
     args = parser.parse_args()
+
+    if args.transactions_only:
+        sync_transactions_only(args.transactions_only)
+        raise SystemExit(0)
 
     if args.regen:
         scope_type, scope_value = args.regen
