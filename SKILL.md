@@ -67,7 +67,8 @@ SlipProcessor เป็นระบบอัตโนมัติสำหรั
 └── template/                     ← .gitignore (มีข้อมูลบริษัท)
     ├── ใบรับรองแทนใบเสร็จรับเงิน.docx           ← template บุคคลทั่วไป
     ├── ใบรับรองแทนใบเสร็จรับเงินบริษัท.docx      ← template สำหรับ uan/ceramic
-    └── ใบสำคัญรับเงิน.docx                       ← template เอกสารที่ 2 (ต้องมี vendor)
+    ├── ใบสำคัญรับเงิน.docx                       ← template เอกสารที่ 2 บุคคลทั่วไป (ต้องมี vendor)
+    └── ใบสำคัญรับเงินบริษัท.docx                 ← template เอกสารที่ 2 สำหรับ uan/ceramic (placeholder เหมือนตัวบุคคลทุกอย่าง)
 ```
 
 ---
@@ -85,16 +86,20 @@ SlipProcessor/                  (root บน Google Drive)
 │   │           ├── images/     ← รูป slip ที่ sort แล้ว
 │   │           ├── metadata/   ← JSON ข้อมูลที่ Claude อ่านได้ (1 ไฟล์ต่อ 1 slip)
 │   │           └── docs/
-│   │               ├── บุคคล/
-│   │               │   ├── 20260624-ใบรับรองแทนใบเสร็จรับเงิน.pdf
-│   │               │   └── ใบสำคัญรับเงิน/
-│   │               │       └── 20260624-<ชื่อ vendor>.pdf
-│   │               ├── uan/
-│   │               └── ceramic/
+│   │               ├── ใบรับรองแทนใบเสร็จรับเงิน/
+│   │               │   ├── บุคคล/20260624-ใบรับรองแทนใบเสร็จรับเงิน-บุคคล.pdf
+│   │               │   ├── uan/20260624-ใบรับรองแทนใบเสร็จรับเงิน-uan.pdf
+│   │               │   └── ceramic/20260624-ใบรับรองแทนใบเสร็จรับเงิน-ceramic.pdf
+│   │               └── ใบสำคัญรับเงิน/
+│   │                   ├── บุคคล/20260624-<ชื่อ vendor>-บุคคล.pdf
+│   │                   ├── uan/20260624-<ชื่อ vendor>-uan.pdf
+│   │                   └── ceramic/20260624-<ชื่อ vendor>-ceramic.pdf
 │   └── unclassified/
 │       ├── no_note/            ← slip ที่ไม่มี note
 │       └── invalid/            ← อ่านไม่ได้ / ไม่ใช่ slip โอนเงิน
 ```
+
+**ทำไมชื่อไฟล์มี `-{category}` ต่อท้ายเสมอ**: จัด folder แบบ "ประเภทเอกสารก่อน แล้วค่อยหมวด" ทำให้วันเดียวกันที่มีทั้ง `บุคคล`/`uan`/`ceramic` มารวมกันอยู่ใต้ folder แม่เดียวกัน (`ใบรับรองแทนใบเสร็จรับเงิน/`) ถ้าไม่ใส่ category ต่อท้าย ชื่อไฟล์จะซ้ำกันข้าม category ได้ (เช่น `20260624-ใบรับรองแทนใบเสร็จรับเงิน.pdf` ทั้งของ บุคคล และ uan) ซึ่งจะทำให้ `utils/transactions.py`'s `_get_drive_link_by_name()` (ค้นหาไฟล์ด้วยชื่อไฟล์อย่างเดียว ไม่สนใจ path) หาไฟล์ผิดได้
 
 Mount point บน Pi: `/home/pi/slip-processor/{rawFile,data}` ผ่าน rclone (`--vfs-cache-mode full`)
 
@@ -160,15 +165,17 @@ Phase 2 — Sync (ช้า แต่ไม่ block process)
 
 ```python
 NOTE_ROUTES = [
-    {"keyword": "uan",     "subfolder": "uan",     "template": "ใบรับรองแทนใบเสร็จรับเงินบริษัท.docx"},
-    {"keyword": "ceramic", "subfolder": "ceramic", "template": "ใบรับรองแทนใบเสร็จรับเงินบริษัท.docx"},
+    {"keyword": "uan",     "subfolder": "uan",     "cert_template": "ใบรับรองแทนใบเสร็จรับเงินบริษัท.docx", "receipt_template": "ใบสำคัญรับเงินบริษัท.docx"},
+    {"keyword": "ceramic", "subfolder": "ceramic", "cert_template": "ใบรับรองแทนใบเสร็จรับเงินบริษัท.docx", "receipt_template": "ใบสำคัญรับเงินบริษัท.docx"},
 ]
-NOTE_DEFAULT_SUBFOLDER = "บุคคล"
-NOTE_DEFAULT_TEMPLATE  = "ใบรับรองแทนใบเสร็จรับเงิน.docx"
+NOTE_DEFAULT_SUBFOLDER        = "บุคคล"
+NOTE_DEFAULT_CERT_TEMPLATE    = "ใบรับรองแทนใบเสร็จรับเงิน.docx"
+NOTE_DEFAULT_RECEIPT_TEMPLATE = "ใบสำคัญรับเงิน.docx"
 ```
 
 - เจอ keyword **ที่ไหนก็ได้** ใน note (ไม่ต้องขึ้นต้น), ไม่ case-sensitive
 - เพิ่ม/ลด keyword แก้ที่ไฟล์นี้ที่เดียว ไม่ต้องแตะ `gen_pdf.py`
+- แต่ละ route มี template แยก 2 ชนิด: `cert_template` (ใบรับรองแทนใบเสร็จรับเงิน) กับ `receipt_template` (ใบสำคัญรับเงิน — gen เฉพาะตอนมี vendor match) เลือกจาก note keyword เดียวกัน
 
 ---
 

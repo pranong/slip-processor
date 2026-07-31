@@ -18,7 +18,10 @@ from docx import Document as DocxDocument
 from docx.oxml.ns import qn
 
 from config.config import DATA_MOUNT, TEMPLATE_DIR, TEMPLATE_PATH, MONTH_MAP
-from config.gen_config import NOTE_ROUTES, NOTE_DEFAULT_SUBFOLDER, NOTE_DEFAULT_TEMPLATE
+from config.gen_config import (
+    NOTE_ROUTES, NOTE_DEFAULT_SUBFOLDER,
+    NOTE_DEFAULT_CERT_TEMPLATE, NOTE_DEFAULT_RECEIPT_TEMPLATE,
+)
 from utils.thai_baht_text import baht_text
 from utils.state import load_state, save_state, mark_generated, is_generated
 from utils.vendor import find_vendor, load_vendors
@@ -34,17 +37,19 @@ MONTH_MAP_NUM = {
 
 
 def get_route(note: str) -> dict:
-    """หา subfolder และ template จาก note — เจอ keyword ที่ไหนก็ได้ ไม่ case sensitive"""
+    """หา subfolder + template (cert และ receipt) จาก note — เจอ keyword ที่ไหนก็ได้ ไม่ case sensitive"""
     note_lower = (note or "").lower()
     for route in NOTE_ROUTES:
         if route["keyword"].lower() in note_lower:
             return {
-                "subfolder": route["subfolder"],
-                "template":  Path(TEMPLATE_DIR) / route["template"],
+                "subfolder":        route["subfolder"],
+                "cert_template":    Path(TEMPLATE_DIR) / route["cert_template"],
+                "receipt_template": Path(TEMPLATE_DIR) / route["receipt_template"],
             }
     return {
-        "subfolder": NOTE_DEFAULT_SUBFOLDER,
-        "template":  Path(TEMPLATE_DIR) / NOTE_DEFAULT_TEMPLATE,
+        "subfolder":        NOTE_DEFAULT_SUBFOLDER,
+        "cert_template":    Path(TEMPLATE_DIR) / NOTE_DEFAULT_CERT_TEMPLATE,
+        "receipt_template": Path(TEMPLATE_DIR) / NOTE_DEFAULT_RECEIPT_TEMPLATE,
     }
 
 # ── Summary ───────────────────────────────────────────────────────────────────
@@ -285,15 +290,15 @@ def fill_template(slips: list[dict], day_str: str, month_name: str,
 
 
 def fill_template_receipt(slips: list[dict], day_str: str, month_name: str,
-                          year_thai: str) -> Path | None:
+                          year_thai: str, template_path: Path | None = None) -> Path | None:
     """
-    เติมข้อมูลลง template ใบสำคัญรับเงิน
+    เติมข้อมูลลง template ใบสำคัญรับเงิน (รองรับทั้งตัวบุคคลและตัวบริษัท — หน้าตา/placeholder เหมือนกัน)
     placeholder ต่างจากใบรับรองฯ:
     - vendor info: $vndName, $vndId, $vndAddress, $vndM, $vndSt, $vndZone, $vndCity, $vndProv
     - ตาราง: $desc[0], $amountF[0], $amountSt[0]
     - รวม: $intSumFTotal, $intSumStTotal, $thSumTotal
     """
-    template_path = Path(TEMPLATE_DIR) / "ใบสำคัญรับเงิน.docx"
+    template_path = template_path if template_path else Path(TEMPLATE_DIR) / "ใบสำคัญรับเงิน.docx"
     if not template_path.exists():
         log(f"    ⚠️  ไม่พบ template: {template_path}")
         return None
@@ -488,13 +493,21 @@ def run(local_data_path: str | None = None) -> dict:
                     route = get_route(note)
                     sf    = route["subfolder"]
                     if sf not in groups:
-                        groups[sf] = {"slips": [], "template": route["template"]}
+                        groups[sf] = {
+                            "slips": [],
+                            "cert_template":    route["cert_template"],
+                            "receipt_template": route["receipt_template"],
+                        }
                     groups[sf]["slips"].append(s)
 
                 for sf, group in groups.items():
-                    group_slips = group["slips"]
-                    tmpl_path   = group["template"]
-                    local_docs  = local_output / year_dir.name / month_dir.name / day_dir.name / sf
+                    group_slips      = group["slips"]
+                    cert_tmpl_path   = group["cert_template"]
+                    receipt_tmpl_path = group["receipt_template"]
+
+                    docs_root      = local_output / year_dir.name / month_dir.name / day_dir.name / "docs"
+                    local_docs     = docs_root / "ใบรับรองแทนใบเสร็จรับเงิน" / sf
+                    local_receipt_dir = docs_root / "ใบสำคัญรับเงิน" / sf
 
                     new_slips = [
                         s for s in group_slips
@@ -512,7 +525,7 @@ def run(local_data_path: str | None = None) -> dict:
 
                     docx_path = fill_template(
                         group_slips, day_dir.name, month_dir.name,
-                        year_dir.name, template_path=tmpl_path,
+                        year_dir.name, template_path=cert_tmpl_path,
                     )
 
                     if docx_path is None:
@@ -520,7 +533,9 @@ def run(local_data_path: str | None = None) -> dict:
                         continue
 
                     date_prefix  = f"{year_dir.name}{MONTH_MAP_NUM.get(month_dir.name, '00')}{day_dir.name}"
-                    final_name   = f"{date_prefix}-ใบรับรองแทนใบเสร็จรับเงิน"
+                    # ใส่ sf ต่อท้ายชื่อไฟล์กัน collision ข้าม category (วันเดียวกันมีทั้ง uan/บุคคล ชื่อไฟล์ชนกันได้
+                    # เพราะตอนนี้ทุก category ของเอกสารชนิดเดียวกันมารวมอยู่ใต้ folder แม่เดียวกัน)
+                    final_name   = f"{date_prefix}-ใบรับรองแทนใบเสร็จรับเงิน-{sf}"
                     renamed_docx = local_docs / f"{final_name}.docx"
                     shutil.move(str(docx_path), str(renamed_docx))
                     pdf_path = convert_to_pdf(renamed_docx, local_docs)
@@ -531,7 +546,7 @@ def run(local_data_path: str | None = None) -> dict:
                         results["failed"] += 1
                         continue
 
-                    log(f"    ✅ {date_prefix}-ใบรับรองแทนใบเสร็จรับเงิน.pdf")
+                    log(f"    ✅ {final_name}.pdf")
 
                     from collections import defaultdict
                     slips_by_vendor: dict[str, list] = defaultdict(list)
@@ -539,7 +554,7 @@ def run(local_data_path: str | None = None) -> dict:
                         to_name = s.get("to_name") or s.get("to_account", "")
                         slips_by_vendor[to_name].append(s)
 
-                    local_receipt_dir = local_docs / "ใบสำคัญรับเงิน"
+                    receipt_paths_rel = {}
                     for to_name, vendor_slips in slips_by_vendor.items():
                         vendor = find_vendor(to_name, vendors)
                         if vendor is None:
@@ -548,10 +563,11 @@ def run(local_data_path: str | None = None) -> dict:
                         for s in vendor_slips:
                             s["vendor"] = vendor
                         safe_name = to_name.replace("/", "-").replace("\\", "-")
-                        file_name = f"{date_prefix}-{safe_name}"
+                        file_name = f"{date_prefix}-{safe_name}-{sf}"
                         local_receipt_dir.mkdir(parents=True, exist_ok=True)
                         receipt_docx = fill_template_receipt(
                             vendor_slips, day_dir.name, month_dir.name, year_dir.name,
+                            template_path=receipt_tmpl_path,
                         )
                         if receipt_docx:
                             renamed_receipt = local_receipt_dir / f"{file_name}.docx"
@@ -559,7 +575,8 @@ def run(local_data_path: str | None = None) -> dict:
                             receipt_pdf = convert_to_pdf(renamed_receipt, local_receipt_dir)
                             renamed_receipt.unlink(missing_ok=True)
                             if receipt_pdf:
-                                log(f"    ✅ ใบสำคัญรับเงิน/{file_name}.pdf")
+                                log(f"    ✅ ใบสำคัญรับเงิน/{sf}/{file_name}.pdf")
+                                receipt_paths_rel[to_name] = f"{file_name}.pdf"
 
                     mark_generated(state, year_dir.name, month_dir.name,
                                    day_dir.name, sf, group_slips, str(pdf_path))
@@ -578,12 +595,6 @@ def run(local_data_path: str | None = None) -> dict:
                     results["new"] += 1
 
                     # เก็บข้อมูลไว้สำหรับบันทึก transactions หลัง sync เสร็จ (ต้องมีไฟล์บน Drive ก่อนหา link ได้)
-                    receipt_paths_rel = {}
-                    if local_receipt_dir.exists():
-                        for rf in local_receipt_dir.glob("*.pdf"):
-                            name_part = rf.stem[9:]
-                            receipt_paths_rel[name_part] = rf.name
-
                     results.setdefault("_pending_transactions", []).append({
                         "slips": group_new,
                         "category": sf,
@@ -660,7 +671,7 @@ def sync_transactions_only(scope: str) -> dict:
                 date_prefix = f"{year_dir.name}{MONTH_MAP_NUM.get(month_dir.name, '00')}{day_dir.name}"
 
                 for sf, group_slips in groups.items():
-                    cert_filename = f"{date_prefix}-ใบรับรองแทนใบเสร็จรับเงิน.pdf"
+                    cert_filename = f"{date_prefix}-ใบรับรองแทนใบเสร็จรับเงิน-{sf}.pdf"
 
                     from collections import defaultdict
                     slips_by_vendor: dict[str, list] = defaultdict(list)
@@ -676,7 +687,7 @@ def sync_transactions_only(scope: str) -> dict:
                         for s in vendor_slips:
                             s["vendor"] = vendor
                         safe_name = to_name.replace("/", "-").replace("\\", "-")
-                        receipt_filenames[to_name] = f"{date_prefix}-{safe_name}.pdf"
+                        receipt_filenames[to_name] = f"{date_prefix}-{safe_name}-{sf}.pdf"
 
                     log(f"   📦 {year_dir.name}/{month_dir.name}/{day_dir.name}/{sf} "
                         f"— {len(group_slips)} slips, cert={cert_filename}")
