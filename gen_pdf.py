@@ -748,6 +748,7 @@ if __name__ == "__main__":
         # mount ทีละไฟล์) — ไม่เอา images/PDF เก่า/summary.json เพราะ gen_pdf.py ไม่ใช้เลย ──
         import tempfile
         local_data_root = Path(tempfile.mkdtemp()) / "regen_data"
+        local_data_root.mkdir(parents=True, exist_ok=True)  # เผื่อ rclone ไม่เจอไฟล์เลยแล้วไม่สร้าง folder ให้
         log(f"📥 copy metadata scope={scope_value} มา local...")
         notify.send("📥 กำลัง copy metadata...")
         subprocess.run([
@@ -759,6 +760,13 @@ if __name__ == "__main__":
             "--config", str(Path.home() / ".config/rclone/rclone.conf"),
         ])
         notify.send("✅ copy metadata เสร็จแล้ว")
+
+        if not any(local_data_root.iterdir()):
+            msg = f"⚠️ ไม่พบ metadata เลยสำหรับ scope={scope_value} — เช็คว่าวัน/เดือน/ปีถูกต้องไหม (ไม่มีอะไรให้ gen)"
+            log(msg)
+            notify.send(msg)
+            raise SystemExit(0)
+
         local_data_path = str(local_data_root)
 
     t_total = time.time()
