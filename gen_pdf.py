@@ -751,10 +751,14 @@ if __name__ == "__main__":
         local_data_root.mkdir(parents=True, exist_ok=True)  # เผื่อ rclone ไม่เจอไฟล์เลยแล้วไม่สร้าง folder ให้
         log(f"📥 copy metadata scope={scope_value} มา local...")
         notify.send("📥 กำลัง copy metadata...")
+        # ระบุ pattern ตรงๆ ทุกความลึกที่เป็นไปได้ (scope วัน/เดือน/ปี ทำให้ metadata/ อยู่ลึกไม่เท่ากัน)
+        # ไม่พึ่ง "**/metadata/**" เพราะ rclone ไม่ match กรณี metadata อยู่ที่ root ตรงๆ (scope ระดับวัน)
         subprocess.run([
             "rclone", "copy", f"gdrive:SlipProcessor/data/{scope_value}",
             str(local_data_root / scope_value),
-            "--include", "**/metadata/**",
+            "--include", "metadata/**",        # scope = วัน (metadata อยู่ root)
+            "--include", "*/metadata/**",      # scope = เดือน (metadata อยู่ใต้ {day}/)
+            "--include", "*/*/metadata/**",    # scope = ปี (metadata อยู่ใต้ {month}/{day}/)
             "--transfers", "16", "--checkers", "32", "--fast-list",
             "--stats", "30s", "-v",
             "--config", str(Path.home() / ".config/rclone/rclone.conf"),
