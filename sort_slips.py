@@ -125,8 +125,15 @@ def safe_copy(src: Path, dest_dir: Path) -> Path:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def run() -> dict:
+def run(expected_month: int | None = None, expected_year: int | None = None) -> dict:
+    """
+    expected_month/expected_year: บอกล่วงหน้าว่ารอบนี้อัปโหลดของเดือน/ปีไหน (อัปทีละเดือน)
+    ถ้าอ่านได้ไม่ตรง (Claude อ่านเดือนผิด เช่น ก.ค./ม.ค. หน้าตาคล้ายกัน) จะแยกไป
+    unclassified/month_mismatch/ ให้ตรวจมือ แทนที่จะยัดเข้าโฟลเดอร์เดือนผิด
+    """
     import tempfile, subprocess
+    if expected_month:
+        log(f"📆 คาดว่าเป็นเดือน {expected_month}" + (f"/{expected_year}" if expected_year else ""))
     raw  = Path(RAW_MOUNT)
 
     if not raw.exists():
@@ -166,7 +173,7 @@ def run() -> dict:
 
     client   = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     ref_db   = load_ref_db()
-    results  = {"new": 0, "duplicate": 0, "no_note": 0, "invalid": 0, "failed": 0, "details": []}
+    results  = {"new": 0, "duplicate": 0, "no_note": 0, "invalid": 0, "failed": 0, "month_mismatch": 0, "details": []}
     lock     = threading.Lock()
 
     from utils.vendor import load_vendors, find_vendor
@@ -233,6 +240,21 @@ def run() -> dict:
             day_str    = f"{day:02d}"
             year_str   = str(year)
 
+            # ── เช็คเดือน/ปีที่คาดไว้ (ระบุตอนรัน เพราะอัปโหลดทีละเดือน) — ไม่ตรง = อ่านผิดแน่ๆ
+            # แยกไปตรวจมือแทนยัดเข้าโฟลเดอร์เดือนผิด ──
+            if (expected_month and month != expected_month) or (expected_year and year != expected_year):
+                safe_copy(img, local_data / "unclassified" / "month_mismatch")
+                log(f"🔀 อ่านได้ {day_str}/{month_name}/{year} แต่ควรเป็นเดือน "
+                    f"{expected_month or '?'}/{expected_year or '?'} → แยกไว้ตรวจมือ")
+                with lock:
+                    results["month_mismatch"] += 1
+                    results["details"].append({
+                        "file": img.name, "status": "month_mismatch",
+                        "day": day, "month": month, "year": year,
+                        "expected_month": expected_month, "expected_year": expected_year,
+                    })
+                return
+
             dest_dir     = local_data / year_str / month_name / day_str / "images"
             metadata_dir = local_data / year_str / month_name / day_str / "metadata"
             dest_img     = safe_copy(img, dest_dir)
@@ -295,10 +317,23 @@ def run() -> dict:
 
     # ── rclone upload ย้ายไปทำที่ run_pipeline แทน ──
     log(f"\n{'='*55}")
-    log(f"✅ ใหม่: {results['new']}  ⚠️ ซ้ำ: {results['duplicate']}  ❓ ไม่มี note: {results['no_note']}  ❌ อ่านไม่ได้: {results['invalid']}")
+    log(f"✅ ใหม่: {results['new']}  ⚠️ ซ้ำ: {results['duplicate']}  ❓ ไม่มี note: {results['no_note']}  "
+        f"❌ อ่านไม่ได้: {results['invalid']}  🔀 เดือนไม่ตรง: {results.get('month_mismatch', 0)}")
     results["_local_data"] = str(local_data)  # ส่ง path กลับไปให้ run_pipeline sync
     return results
 
 
 if __name__ == "__main__":
-    run()
+    import argparse, sys
+    parser = argparse.ArgumentParser(description="Sort slip จาก rawFile")
+    parser.add_argument("--month", type=int, help="เดือนที่คาดว่าจะเจอ (1-12) — ไม่ตรงจะแยกไปตรวจมือ")
+    parser.add_argument("--year", type=int, help="ปี ค.ศ. ที่คาดว่าจะเจอ (ไม่บังคับ)")
+    args = parser.parse_args()
+
+    month = args.month
+    if month is None and sys.stdin.isatty():
+        ans = input("ระบุเดือน (กรณีไม่ระบุ ใส่ 0) > ").strip()
+        if ans.isdigit() and int(ans) != 0:
+            month = int(ans)
+
+    run(expected_month=month, expected_year=args.year)

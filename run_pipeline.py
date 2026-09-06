@@ -32,27 +32,52 @@ def setup_logging():
 
 
 def clear_raw_files():
+    """
+    ลบรูปใน rawFile — ไม่ใส่ timeout ตั้งใจ (ไฟล์เยอะ = API round-trip สะสม ไม่ใช่ค้างจริง)
+
+    สำคัญ: `rclone delete` returncode == 0 ไม่ได้แปลว่าลบไฟล์จริง! (ลบ 0 ไฟล์ก็ returncode 0
+    เหมือนกัน ไม่ใช่ error) เจอเคสที่ log บอก "ลบเสร็จแล้ว" ทั้งที่รูปยังอยู่จริง — เลยต้องนับ
+    ไฟล์ก่อน/หลังด้วย `rclone lsf` เทียบกันตรงๆ แทนที่จะเชื่อ returncode เฉยๆ
+    """
     import subprocess
-    # ไม่ใส่ timeout ตั้งใจ (เหมือนจุดอื่น) — ไฟล์เยอะ = API round-trip สะสม ไม่ใช่ค้างจริง
-    result = subprocess.run([
-        "rclone", "delete", "gdrive:SlipProcessor/rawFile",
-        "--filter", "+ *.jpg",
-        "--filter", "+ *.jpeg",
-        "--filter", "+ *.png",
-        "--filter", "+ *.webp",
-        "--filter", "+ *.JPG",
-        "--filter", "+ *.JPEG",
-        "--filter", "+ *.PNG",
-        "--filter", "+ *.WEBP",
+    cfg = str(Path.home() / ".config/rclone/rclone.conf")
+    filt = [
+        "--filter", "+ *.jpg", "--filter", "+ *.jpeg",
+        "--filter", "+ *.png", "--filter", "+ *.webp",
+        "--filter", "+ *.JPG", "--filter", "+ *.JPEG",
+        "--filter", "+ *.PNG", "--filter", "+ *.WEBP",
         "--filter", "- *",
+    ]
+
+    def _count():
+        r = subprocess.run(
+            ["rclone", "lsf", "gdrive:SlipProcessor/rawFile", *filt, "--config", cfg],
+            capture_output=True, text=True,
+        )
+        return len([l for l in r.stdout.splitlines() if l.strip()])
+
+    before = _count()
+    if before == 0:
+        log("🗑️  rawFile ว่างอยู่แล้ว ไม่มีอะไรให้ลบ")
+        return 0
+
+    result = subprocess.run([
+        "rclone", "delete", "gdrive:SlipProcessor/rawFile", *filt,
         "--checkers", "32",
-        "--fast-list",
-        "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+        "--config", cfg,
     ], capture_output=True, text=True)
-    if result.returncode == 0:
-        log("🗑️  ลบรูปใน rawFile เสร็จแล้ว")
+    if result.returncode != 0:
+        log(f"⚠️  ลบ rawFile error: {result.stderr[:200]}")
+        return 0
+
+    after = _count()
+    if after > 0:
+        msg = f"🔴 ลบ rawFile ไม่หมด! ก่อนลบ {before} ไฟล์ เหลือ {after} ไฟล์ — เช็คด้วยตาที่ Drive"
+        log(msg)
+        from utils import notify
+        notify.send(msg)
     else:
-        log(f"⚠️  ลบ rawFile error: {result.stderr[:100]}")
+        log(f"🗑️  ลบรูปใน rawFile เสร็จแล้ว ({before} ไฟล์)")
     return 0
 
 
@@ -133,6 +158,7 @@ def build_sort_message(sort_result: dict, elapsed: str = "") -> str:
         f"⚠️  ซ้ำ          : {sort_result.get('duplicate', 0)}",
         f"❓ ไม่มี note   : {sort_result.get('no_note', 0)}",
         f"❌ อ่านไม่ได้   : {sort_result.get('invalid', 0)}",
+        f"🔀 เดือนไม่ตรง  : {sort_result.get('month_mismatch', 0)}",
     ]
     return "\n".join(lines)
 
@@ -153,7 +179,7 @@ def build_gen_message(gen_result: dict, elapsed: str = "") -> str:
     return "\n".join(lines)
 
 
-def main():
+def main(expected_month: int | None = None, expected_year: int | None = None):
     import time
     t_total = time.time()
 
@@ -176,7 +202,7 @@ def main():
     # ── 1. sort slips ──
     log("\n── ขั้นตอน 1: sort ──")
     t0 = time.time()
-    sort_result = sort_slips.run()
+    sort_result = sort_slips.run(expected_month=expected_month, expected_year=expected_year)
     sort_elapsed = fmt_duration(time.time() - t0)
     local_data = sort_result.get("_local_data")
 
@@ -194,6 +220,17 @@ def main():
         lines = [f"❌ อ่านไม่ได้ {len(invalid)} ไฟล์ → unclassified/invalid/"]
         for u in invalid[:10]:
             lines.append(f"  - {u['file']}")
+        notify.send("\n".join(lines))
+
+    month_mismatch = [d for d in sort_result.get("details", []) if d.get("status") == "month_mismatch"]
+    if month_mismatch:
+        exp = month_mismatch[0]
+        lines = [
+            f"🔀 เดือนไม่ตรงกับที่คาดไว้ {len(month_mismatch)} ไฟล์ "
+            f"(คาดไว้ว่าเป็น {exp.get('expected_month')}/{exp.get('expected_year') or '?'}) → unclassified/month_mismatch/ (เช็คมือ)",
+        ]
+        for u in month_mismatch[:10]:
+            lines.append(f"  - {u['file']} (อ่านได้ {u.get('month')}/{u.get('year')})")
         notify.send("\n".join(lines))
 
     if sort_result.get("new", 0) == 0:
@@ -285,11 +322,32 @@ def main():
 
 
 if __name__ == "__main__":
-    import os
-    if os.environ.get("SLIP_PIPELINE_DETACHED") != "1":
+    import os, sys, argparse
+
+    parser = argparse.ArgumentParser(description="Sort + gen PDF ทั้ง pipeline")
+    parser.add_argument("--month", type=int, help="เดือนที่คาดว่าจะเจอ (1-12) — ไม่ตรงจะแยกไปตรวจมือ")
+    parser.add_argument("--year", type=int, help="ปี ค.ศ. ที่คาดว่าจะเจอ (ไม่บังคับ)")
+    args = parser.parse_args()
+    month, year = args.month, args.year
+
+    already_detached = os.environ.get("SLIP_PIPELINE_DETACHED") == "1"
+
+    # ── ถามเดือนแบบ interactive ถ้าไม่ได้ใส่ --month มา และเป็น terminal จริงๆ (ไม่ใช่ cron/detached) ──
+    # ต้องถามตรงนี้ก่อน re-exec เพราะพอ detach ไปแล้ว stdin จะถูก redirect เป็น /dev/null ถามไม่ได้อีก
+    if month is None and not already_detached and sys.stdin.isatty():
+        ans = input("ระบุเดือน (กรณีไม่ระบุ ใส่ 0) > ").strip()
+        if ans.isdigit() and int(ans) != 0:
+            month = int(ans)
+
+    if not already_detached:
         # รันตรงๆ ผ่าน `python3 run_pipeline.py` ให้ re-exec ไปทาง scripts/run_safe.sh อัตโนมัติ
         # กัน SSH หลุดแล้วโดน SIGHUP ฆ่าทิ้งกลางทาง (เหมือนที่เคยเกิดตอน sync) — พิมพ์คำสั่งเดียว ไม่ต้องจำ 2 แบบ
         # Telegram bot เรียก main() ตรงๆ ไม่ผ่าน __main__ นี้ เลยไม่โดน re-exec ซ้ำ ทำงานเหมือนเดิม
-        script = str(Path(CODE_DIR) / "scripts" / "run_safe.sh")
-        os.execvp("bash", ["bash", script])
-    main()
+        script  = str(Path(CODE_DIR) / "scripts" / "run_safe.sh")
+        argv = ["python3", __file__]
+        if month is not None:
+            argv += ["--month", str(month)]
+        if year is not None:
+            argv += ["--year", str(year)]
+        os.execvp("bash", ["bash", script] + argv)
+    main(expected_month=month, expected_year=year)

@@ -707,7 +707,7 @@ def sync_transactions_only(scope: str) -> dict:
 
 
 if __name__ == "__main__":
-    import argparse, time
+    import argparse, time, sys
     from run_pipeline import fmt_duration
 
     parser = argparse.ArgumentParser(description="Gen PDF ใบรับรองแทนใบเสร็จรับเงิน")
@@ -729,6 +729,22 @@ if __name__ == "__main__":
     if args.transactions_only:
         sync_transactions_only(args.transactions_only)
         raise SystemExit(0)
+
+    # ── ไม่ได้ใส่ --regen มาเลย และเป็น terminal จริงๆ (ไม่ใช่ cron) → ถามเป็น wizard แทน ──
+    if not args.regen and sys.stdin.isatty():
+        ans = input("ต้องการ regen ไหม (y/N) > ").strip().lower()
+        if ans == "y":
+            year_ans = input("ระบุปี > ").strip()
+            month_ans = input("ระบุเดือน (กรณีต้องการทั้งปี ใส่ 0) > ").strip()
+            if not month_ans or month_ans == "0":
+                args.regen = ("year", year_ans)
+            else:
+                month_name = MONTH_MAP.get(int(month_ans), month_ans) if month_ans.isdigit() else month_ans
+                day_ans = input("ระบุวัน (กรณีต้องการทั้งเดือน ใส่ 0) > ").strip()
+                if not day_ans or day_ans == "0":
+                    args.regen = ("month", f"{year_ans}/{month_name}")
+                else:
+                    args.regen = ("day", f"{year_ans}/{month_name}/{int(day_ans):02d}")
 
     local_data_root = None
     local_data_path = None
