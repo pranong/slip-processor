@@ -373,9 +373,12 @@ def main():
             if not msg:
                 continue
             chat_id = str(msg.get("chat", {}).get("id", ""))
-            if chat_id != str(TELEGRAM_CHAT_ID):
-                continue
             text = msg.get("text", "")
+            log(f"[recv] chat_id={chat_id!r} expected={str(TELEGRAM_CHAT_ID)!r} "
+                f"text={text!r} pending={PENDING!r}")
+            if chat_id != str(TELEGRAM_CHAT_ID):
+                log("[recv] chat_id ไม่ตรง — ข้าม")
+                continue
             if text.startswith("/"):
                 log(f"[cmd] {text}")
                 handle_command(text)
