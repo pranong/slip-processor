@@ -18,7 +18,7 @@ SCOPES = [
 
 HEADERS = [
     "date", "category", "vendor_name",
-    "note", "amount", "has_receipt", "img_url", "cert_url", "receipt_url"
+    "note", "amount", "has_receipt", "img_url", "cert_url", "receipt_url", "ref"
 ]
 
 
@@ -36,7 +36,7 @@ def ensure_header(ws):
         first_row = ws.row_values(1)
         if first_row != HEADERS:
             ws.insert_row(HEADERS, 1)
-            ws.format("A1:I1", {"textFormat": {"bold": True}})
+            ws.format("A1:J1", {"textFormat": {"bold": True}})
     except Exception:
         ws.insert_row(HEADERS, 1)
 
@@ -214,8 +214,11 @@ def append_transactions(slips: list[dict], category: str,
     cert_url_raw = _get_drive_link_by_name(drive, cert_filename) if cert_filename else ""
     cert_url = f'=HYPERLINK("{cert_url_raw}","{cert_filename}")' if cert_url_raw else ""
 
-    # ── โหลด row ที่มีอยู่แล้ว จับคู่ (date, category, vendor_name, note, amount) → เลข row จริงบน Sheet ──
-    # เจอ key เดิม = update ทับแถวนั้น ไม่ใช่ลบทั้ง bucket แล้ว append ใหม่
+    # ── โหลด row ที่มีอยู่แล้ว จับคู่ด้วย ref (เลข transaction reference จากธนาคาร ไม่ซ้ำกัน
+    # แน่นอน 100%) → เลข row จริงบน Sheet — เจอ ref เดิม = update ทับแถวนั้น ไม่ใช่ append ใหม่
+    # (ก่อนหน้านี้เคยใช้ (date,category,vendor_name,note,amount) เป็น key แต่ถ้าสลิป 2 ใบใน
+    # กลุ่มเดียวกันข้อมูลเหมือนกันทุกฟิลด์ [เช่น จ่าย vendor เดิมจำนวนเท่ากัน 2 ครั้งในวันเดียว]
+    # จะชนกันแล้ว update ทับแถวเดียวกันซ้ำ ทำให้ข้อมูลอีกใบหายไปเงียบๆ — ref แก้ปัญหานี้ตรงจุด) ──
     try:
         all_values = ws.get_all_values()
     except Exception as e:
@@ -223,10 +226,8 @@ def append_transactions(slips: list[dict], category: str,
         return
     existing_rows = {}
     for row_num, row in enumerate(all_values[1:], start=2):  # แถว 1 = header, sheet เริ่ม index 2
-        if len(row) >= 5:
-            amt = _norm_amount(row[4])
-            if amt is not None:
-                existing_rows[(row[0], row[1], row[2], row[3], amt)] = row_num
+        if len(row) >= 10 and row[9]:
+            existing_rows[row[9]] = row_num
 
     updates  = []  # (row_num, values)
     new_rows = []
@@ -241,6 +242,7 @@ def append_transactions(slips: list[dict], category: str,
         vendor_name = vendor.get("ชื่อ", to_name)
         note        = slip.get("note", "")
         amount      = slip.get("amount", 0)
+        ref         = slip.get("ref") or ""
 
         img_file = slip.get("dest_file") or slip.get("source_file", "")
         img_url_raw  = _get_drive_link_by_name(drive, img_file) if img_file else ""
@@ -257,17 +259,16 @@ def append_transactions(slips: list[dict], category: str,
         has_receipt = "TRUE" if receipt_url_raw else "FALSE"
 
         row = [date_str, category, vendor_name,
-               note, amount, has_receipt, img_url, cert_url, receipt_url]
+               note, amount, has_receipt, img_url, cert_url, receipt_url, ref]
 
-        key = (date_str, category, vendor_name, note, _norm_amount(amount))
-        if key in existing_rows:
-            updates.append((existing_rows[key], row))
+        if ref and ref in existing_rows:
+            updates.append((existing_rows[ref], row))
         else:
             new_rows.append(row)
 
     if updates:
         try:
-            batch = [{"range": f"A{row_num}:I{row_num}", "values": [row]} for row_num, row in updates]
+            batch = [{"range": f"A{row_num}:J{row_num}", "values": [row]} for row_num, row in updates]
             ws.batch_update(batch, value_input_option="USER_ENTERED")
             log(f"    🔄 update {len(updates)} rows เดิม")
         except Exception as e:
