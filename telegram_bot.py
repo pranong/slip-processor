@@ -4,8 +4,8 @@ telegram_bot.py — รับคำสั่งจาก Telegram แล้ว�
 คำสั่งที่รองรับ (พิมพ์เปล่าๆ = บอทถามทีละคำถามเป็น wizard, หรือพิมพ์ arg รวดเดียวก็ได้):
   /run [เดือน] [ปี]  — รัน pipeline ทั้งหมด (sort + gen)
   /sort [เดือน] [ปี] — รัน sort_slips เท่านั้น
-  /gen               — รัน gen_pdf เท่านั้น
-  /genYear /genMonth /genDay [scope] — regen (wizard ถามปี→เดือน→วัน ถ้าไม่ใส่ scope)
+  /gen               — รัน gen_pdf เท่านั้น (sync + บันทึก transactions ให้ด้วย)
+  /genDoc [ปี] [เดือน] [วัน] — gen เอกสารใหม่เท่านั้น (0=ทั้งหมดในระดับนั้น) ไม่บันทึก transactions
   /status — เช็คสถานะ mount
   /help   — ดูคำสั่งทั้งหมด
 """
@@ -153,9 +153,11 @@ def do_run(cmd: str, month: int | None = None, year: int | None = None):
             send_sort_summary(result, elapsed)
 
         elif cmd == "/gen":
+            # gen_and_sync() ทำ sync PDF + บันทึก transactions ให้ในตัวด้วย (ไม่ใช่แค่ gen เฉยๆ
+            # เหมือนก่อนหน้าที่เรียก run() ตรงๆ แล้วไม่เคย sync/บันทึกอะไรเลย)
             t0 = time.time()
             send(f"🚀 Gen PDF เริ่มแล้ว — {datetime.now().strftime('%H:%M:%S')}")
-            result = gen_pdf.run()
+            result = gen_pdf.gen_and_sync()
             elapsed = fmt_duration(time.time() - t0)
             send_gen_summary(result, elapsed)
 
@@ -177,30 +179,15 @@ def do_run(cmd: str, month: int | None = None, year: int | None = None):
             RUNNING_SINCE = None
 
 
-def reset_pdf_generated(path_filter: str) -> int:
-    """Reset state local ตาม path filter — เร็วมาก ไม่แตะ Drive เลย"""
-    from utils.state import load_state, save_state, reset_state
-    state = load_state()
-    count = reset_state(state, path_filter)
-    save_state(state)
-    return count
-
-
-def do_regen(scope: str):
-    """regen ตาม scope เช่น 2026 / 2026/JUN / 2026/JUN/24"""
+def do_gendoc(scope: str):
+    """
+    gen เอกสาร (PDF) อย่างเดียว ตาม scope — "" = ทุกปี, "2026" = ทั้งปี, "2026/JAN" = ทั้งเดือน,
+    "2026/JAN/07" = วันเดียว — ไม่บันทึก transactions (gen_pdf.gen_docs_only() เตือนเองตอนจบ)
+    """
     global RUNNING
-    import time
-    from datetime import datetime
     try:
         import gen_pdf
-        t0 = time.time()
-        send(f"🚀 Regen เริ่มแล้ว — {datetime.now().strftime('%H:%M:%S')}\nscope: <code>{scope}</code>")
-        count = reset_pdf_generated(scope)
-        send(f"♻️ Reset {count} groups — กำลัง gen...")
-        result = gen_pdf.run()
-        elapsed = fmt_duration(time.time() - t0)
-        send(f"📄 <b>Regen เสร็จแล้ว ({scope})</b>")
-        send_gen_summary(result, elapsed)
+        gen_pdf.gen_docs_only(scope)
     except Exception as e:
         import traceback
         send(f"❌ เกิดข้อผิดพลาด\n<code>{e}</code>")
@@ -225,8 +212,8 @@ def run_command(cmd: str, extra: str = "", month: int | None = None, year: int |
         RUNNING = True
         RUNNING_SINCE = time.time()
 
-    if cmd in ("/genyear", "/genmonth", "/genday"):
-        t = threading.Thread(target=do_regen, args=(extra,), daemon=True)
+    if cmd == "/gendoc":
+        t = threading.Thread(target=do_gendoc, args=(extra,), daemon=True)
     else:
         t = threading.Thread(target=do_run, args=(cmd, month, year), daemon=True)
     t.start()
@@ -241,11 +228,22 @@ def start_month_wizard(cmd: str):
     send("ระบุเดือน (กรณีไม่ระบุ ใส่ 0) >")
 
 
-def start_regen_wizard():
-    """ใช้กับ /genYear, /genMonth, /genDay — ถามปี → เดือน (0=ทั้งปี) → วัน (0=ทั้งเดือน)"""
+def start_gendoc_wizard():
+    """ใช้กับ /genDoc — ถามปี (0=ทุกปี) → เดือน (0=ทั้งปี) → วัน (0=ทั้งเดือน)"""
     global PENDING
-    PENDING = {"flow": "regen", "step": "year"}
-    send("ระบุปี >")
+    PENDING = {"flow": "gendoc", "step": "year"}
+    send("ระบุปี (กรณีต้องการทุกปี ใส่ 0) >")
+
+
+def _gendoc_scope(year: int, month: int = 0, day: int = 0) -> str:
+    if year == 0:
+        return ""
+    if month == 0:
+        return str(year)
+    month_name = MONTH_MAP.get(month, f"{month:02d}")
+    if day == 0:
+        return f"{year}/{month_name}"
+    return f"{year}/{month_name}/{day:02d}"
 
 
 def handle_pending(text: str):
@@ -266,14 +264,20 @@ def handle_pending(text: str):
         run_command(cmd, month=(month or None))
         return
 
-    if flow == "regen":
+    if flow == "gendoc":
         step = PENDING["step"]
 
         if step == "year":
             if not text.isdigit():
-                send("ปีต้องเป็นตัวเลขครับ ลองใหม่ >")
+                send("ปีต้องเป็นตัวเลขครับ (0 = ทุกปี) ลองใหม่ >")
                 return
-            PENDING["year"] = int(text)
+            year = int(text)
+            if year == 0:
+                PENDING = None
+                send("▶ gen เอกสารทุกปีทั้งหมด")
+                run_command("/gendoc", "")
+                return
+            PENDING["year"] = year
             PENDING["step"] = "month"
             send("ระบุเดือน (กรณีต้องการทั้งปี ใส่ 0) >")
             return
@@ -285,10 +289,10 @@ def handle_pending(text: str):
             month = int(text)
             year  = PENDING["year"]
             if month == 0:
-                scope = str(year)
+                scope = _gendoc_scope(year)
                 PENDING = None
-                send(f"▶ regen ทั้งปี {scope}")
-                run_command("/genyear", scope)
+                send(f"▶ gen เอกสารทั้งปี {scope}")
+                run_command("/gendoc", scope)
                 return
             PENDING["month"] = month
             PENDING["step"] = "day"
@@ -299,18 +303,13 @@ def handle_pending(text: str):
             if not text.isdigit():
                 send("วันต้องเป็นตัวเลขครับ ลองใหม่ >")
                 return
-            day        = int(text)
-            year       = PENDING["year"]
-            month_name = MONTH_MAP.get(PENDING["month"], f"{PENDING['month']:02d}")
+            day   = int(text)
+            year  = PENDING["year"]
+            month = PENDING["month"]
             PENDING = None
-            if day == 0:
-                scope = f"{year}/{month_name}"
-                send(f"▶ regen ทั้งเดือน {scope}")
-                run_command("/genmonth", scope)
-            else:
-                scope = f"{year}/{month_name}/{day:02d}"
-                send(f"▶ regen วันเดียว {scope}")
-                run_command("/genday", scope)
+            scope = _gendoc_scope(year, month, day)
+            send(f"▶ gen เอกสาร {scope}")
+            run_command("/gendoc", scope)
             return
 
 
@@ -320,7 +319,6 @@ def handle_command(text: str):
 
     parts = text.strip().split()
     cmd   = parts[0].lower()
-    extra = parts[1].lstrip("-") if len(parts) > 1 else ""
 
     if cmd == "/status":
         send(check_mounts())
@@ -337,21 +335,24 @@ def handle_command(text: str):
             start_month_wizard(cmd)
     elif cmd == "/gen":
         run_command(cmd)
-    elif cmd in ("/genyear", "/genmonth", "/genday"):
-        if extra:
-            run_command(cmd, extra)
+    elif cmd == "/gendoc":
+        if len(parts) > 1 and parts[1].lstrip("-").isdigit():
+            year  = int(parts[1].lstrip("-"))
+            month = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+            day   = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+            run_command(cmd, _gendoc_scope(year, month, day))
         else:
-            start_regen_wizard()
+            start_gendoc_wizard()
     elif cmd == "/help":
         send(
             "📋 <b>คำสั่งที่ใช้ได้</b>\n"
             "─────────────────\n"
             "/run   — รัน pipeline ทั้งหมด (ถามเดือนก่อนเริ่ม, 0=ไม่ระบุ) หรือพิมพ์ /run 7 เลยก็ได้\n"
             "/sort  — อ่าน slip + แยก folder เท่านั้น (ถามเดือนเหมือนกัน)\n"
-            "/gen   — gen PDF เท่านั้น\n"
-            "/genYear  — regen (ถามปี→เดือน→วัน ทีละขั้น) หรือพิมพ์ /genYear -2026 เลยก็ได้\n"
-            "/genMonth — เหมือนกัน หรือพิมพ์ /genMonth -2026/JUN\n"
-            "/genDay   — เหมือนกัน หรือพิมพ์ /genDay -2026/JUN/24\n"
+            "/gen   — gen PDF เท่านั้น (เฉพาะที่ยังไม่ gen) sync + บันทึก transactions ให้ด้วย\n"
+            "/genDoc — gen เอกสารใหม่ (ถามปี[0=ทุกปี]→เดือน[0=ทั้งปี]→วัน[0=ทั้งเดือน] ทีละขั้น)\n"
+            "          <b>ไม่บันทึก transactions</b> — ต้อง update sheet เองทีหลัง\n"
+            "          หรือพิมพ์ /genDoc 2026 1 7 ตรงๆ (ปี เดือน วัน) ก็ได้\n"
             "/reloadvendor — โหลด vendor จาก GSheet ใหม่\n"
             "/status       — เช็คสถานะ mount\n"
             "/help         — แสดงคำสั่ง"

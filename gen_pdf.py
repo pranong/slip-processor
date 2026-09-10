@@ -706,9 +706,244 @@ def sync_transactions_only(scope: str) -> dict:
     return {"groups": groups_done}
 
 
+def regen(scope_value: str) -> dict:
+    """
+    Regen แบบเต็ม: reset state → copy metadata มา local ก่อน → gen PDF → sync PDF ขึ้น Drive →
+    บันทึก transactions ลง Sheet. ใช้ร่วมกันทั้ง CLI (`--regen`) และ Telegram (/genYear ฯลฯ)
+    กันโค้ด duplicate แล้ว drift กัน (เคยมีบั๊กมาก่อน — เวอร์ชัน Telegram เดิมเรียก run() เฉยๆ
+    ไม่เคย sync/บันทึก transactions เลย แถมอ่านจาก mount ตรงๆ ช้ากว่า local staging มาก)
+    """
+    import time, subprocess, tempfile
+    from run_pipeline import fmt_duration, sync_output_dir
+    from utils import notify
+    from utils.state import load_state, save_state, reset_state
+    from utils.transactions import append_transactions
+
+    log(f"♻️  Regen mode: scope = {scope_value}")
+    notify.send(f"🚀 Regen เริ่มแล้ว — scope: {scope_value}")
+
+    state = load_state()
+    count = reset_state(state, scope_value)
+    save_state(state)
+    log(f"   Reset {count} groups — กำลัง gen...\n")
+
+    # ── local staging: copy แค่ folder "metadata/" ของ scope นี้มา local ก่อน (เร็วกว่าอ่านจาก
+    # mount ทีละไฟล์) — ไม่เอา images/PDF เก่า/summary.json เพราะ gen_pdf.py ไม่ใช้เลย ──
+    local_data_root = Path(tempfile.mkdtemp()) / "regen_data"
+    local_data_root.mkdir(parents=True, exist_ok=True)
+    log(f"📥 copy metadata scope={scope_value} มา local...")
+    notify.send("📥 กำลัง copy metadata...")
+    # ระบุ pattern ตรงๆ ทุกความลึกที่เป็นไปได้ (scope วัน/เดือน/ปี ทำให้ metadata/ อยู่ลึกไม่เท่ากัน)
+    subprocess.run([
+        "rclone", "copy", f"gdrive:SlipProcessor/data/{scope_value}",
+        str(local_data_root / scope_value),
+        "--include", "metadata/**",
+        "--include", "*/metadata/**",
+        "--include", "*/*/metadata/**",
+        "--transfers", "16", "--checkers", "32", "--fast-list",
+        "--stats", "30s", "-v",
+        "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+    ])
+    notify.send("✅ copy metadata เสร็จแล้ว")
+
+    import shutil as _shutil
+    if not any(local_data_root.iterdir()):
+        msg = f"⚠️ ไม่พบ metadata เลยสำหรับ scope={scope_value} — เช็คว่าวัน/เดือน/ปีถูกต้องไหม (ไม่มีอะไรให้ gen)"
+        log(msg)
+        notify.send(msg)
+        _shutil.rmtree(local_data_root, ignore_errors=True)
+        return {"new": 0, "failed": 0}
+
+    local_data_path = str(local_data_root)
+
+    t_total = time.time()
+    log("\n── กำลัง gen PDF ──")
+    notify.send("📄 กำลัง gen PDF...")
+    t0 = time.time()
+    result = run(local_data_path=local_data_path)
+    gen_elapsed = fmt_duration(time.time() - t0)
+    notify.send(f"✅ gen PDF เสร็จแล้ว ({gen_elapsed})")
+
+    local_output = result.get("_local_output")
+    pdf_ok = True
+    sync_elapsed = "0 วิ"
+    if local_output:
+        log("\n── Sync PDFs ขึ้น Drive ──")
+        notify.send("🔄 กำลัง sync PDF ขึ้น Drive...")
+        t0 = time.time()
+        pdf_ok = sync_output_dir(local_output)
+        sync_elapsed = fmt_duration(time.time() - t0)
+        log("   ✅ PDFs synced" if pdf_ok else "   ❌ sync PDFs ล้มเหลว — ข้ามบันทึก transactions")
+        notify.send(f"✅ sync PDF เสร็จแล้ว ({sync_elapsed})" if pdf_ok else "❌ sync PDF ล้มเหลว — ข้ามบันทึก transactions")
+
+    pending = result.get("_pending_transactions", []) if pdf_ok else []
+    t0 = time.time()
+    if pending:
+        log(f"\n── บันทึก Transactions ({len(pending)} groups) ──")
+        notify.send(f"📊 กำลัง update transaction sheet ({len(pending)} groups)...")
+        for i, item in enumerate(pending, 1):
+            log(f"   📦 [{i}/{len(pending)}] category={item['category']} cert={item['cert_filename']} receipts={list(item['receipt_filenames'].keys())}")
+            try:
+                append_transactions(
+                    slips=item["slips"],
+                    category=item["category"],
+                    cert_filename=item["cert_filename"],
+                    receipt_filenames=item["receipt_filenames"],
+                )
+            except Exception as e:
+                log(f"   ⚠️  บันทึก transactions ไม่ได้: {e}")
+    tx_elapsed = fmt_duration(time.time() - t0)
+    total_elapsed = fmt_duration(time.time() - t_total)
+
+    notify.send(
+        f"✅ Regen เสร็จสิ้น (scope: {scope_value})\n"
+        f"📄 gen ใหม่: {result.get('new', 0)}  ❌ ล้มเหลว: {result.get('failed', 0)}\n"
+        f"⏱ Gen: {gen_elapsed}\n"
+        f"🔄 Sync: {sync_elapsed}\n"
+        f"📊 Transactions: {tx_elapsed} ({len(pending)} groups)\n"
+        f"⏱ รวม: {total_elapsed}"
+    )
+    log(f"\n✅ เสร็จสิ้น — รวม {total_elapsed}")
+
+    _shutil.rmtree(local_data_root, ignore_errors=True)
+    if local_output:
+        _shutil.rmtree(local_output, ignore_errors=True)
+
+    return result
+
+
+def gen_docs_only(scope_value: str) -> dict:
+    """
+    Regen เอกสาร (PDF) เท่านั้น — reset state → copy metadata local → gen → sync PDF ขึ้น Drive
+    **ไม่บันทึก transactions ลง Sheet เลย** (ใช้ /genDoc ฝั่ง Telegram) ส่งข้อความเตือนตอนจบว่า
+    อย่าลืม update transaction sheet เอง (ผ่าน `gen_pdf.py --transactions-only SCOPE`)
+
+    scope_value: "" = ทุกปีทั้งหมด, "2026" = ทั้งปี, "2026/JAN" = ทั้งเดือน, "2026/JAN/07" = วันเดียว
+    """
+    import time, subprocess, tempfile
+    from run_pipeline import fmt_duration, sync_output_dir
+    from utils import notify
+    from utils.state import load_state, save_state, reset_state
+
+    label = scope_value or "ทั้งหมด (ทุกปี)"
+    log(f"♻️  Gen docs only: scope = {label}")
+    notify.send(f"🚀 Gen เอกสารเริ่มแล้ว — scope: {label}")
+
+    state = load_state()
+    count = reset_state(state, scope_value)
+    save_state(state)
+    log(f"   Reset {count} groups — กำลัง gen...\n")
+
+    # ── local staging: copy แค่ folder "metadata/" ของ scope นี้มา local ก่อน ──
+    local_data_root = Path(tempfile.mkdtemp()) / "regen_data"
+    local_data_root.mkdir(parents=True, exist_ok=True)
+    log(f"📥 copy metadata scope={label} มา local...")
+    notify.send("📥 กำลัง copy metadata...")
+
+    drive_src = f"gdrive:SlipProcessor/data/{scope_value}" if scope_value else "gdrive:SlipProcessor/data"
+    local_dst = (local_data_root / scope_value) if scope_value else local_data_root
+    subprocess.run([
+        "rclone", "copy", drive_src, str(local_dst),
+        "--include", "metadata/**",          # scope = วัน (metadata อยู่ root)
+        "--include", "*/metadata/**",        # scope = เดือน
+        "--include", "*/*/metadata/**",      # scope = ปี
+        "--include", "*/*/*/metadata/**",    # scope = ว่าง (ทุกปี — ลึกกว่าเดิมอีกชั้นเพราะมี {year}/ นำ)
+        "--transfers", "16", "--checkers", "32", "--fast-list",
+        "--stats", "30s", "-v",
+        "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+    ])
+    notify.send("✅ copy metadata เสร็จแล้ว")
+
+    import shutil as _shutil
+    if not any(local_data_root.iterdir()):
+        msg = f"⚠️ ไม่พบ metadata เลยสำหรับ scope={label} — เช็คว่าปี/เดือน/วันถูกต้องไหม (ไม่มีอะไรให้ gen)"
+        log(msg)
+        notify.send(msg)
+        _shutil.rmtree(local_data_root, ignore_errors=True)
+        return {"new": 0, "failed": 0}
+
+    local_data_path = str(local_data_root)
+
+    t_total = time.time()
+    log("\n── กำลัง gen PDF ──")
+    notify.send("📄 กำลัง gen PDF...")
+    t0 = time.time()
+    result = run(local_data_path=local_data_path)
+    gen_elapsed = fmt_duration(time.time() - t0)
+    notify.send(f"✅ gen PDF เสร็จแล้ว ({gen_elapsed})")
+
+    local_output = result.get("_local_output")
+    sync_elapsed = "0 วิ"
+    if local_output:
+        log("\n── Sync PDFs ขึ้น Drive ──")
+        notify.send("🔄 กำลัง sync PDF ขึ้น Drive...")
+        t0 = time.time()
+        pdf_ok = sync_output_dir(local_output)
+        sync_elapsed = fmt_duration(time.time() - t0)
+        log("   ✅ PDFs synced" if pdf_ok else "   ❌ sync PDFs ล้มเหลว")
+        notify.send(f"✅ sync PDF เสร็จแล้ว ({sync_elapsed})" if pdf_ok else "❌ sync PDF ล้มเหลว")
+
+    total_elapsed = fmt_duration(time.time() - t_total)
+
+    notify.send(
+        f"✅ Gen เอกสารเสร็จสิ้น (scope: {label})\n"
+        f"📄 gen ใหม่: {result.get('new', 0)}  ❌ ล้มเหลว: {result.get('failed', 0)}\n"
+        f"⏱ Gen: {gen_elapsed}\n"
+        f"🔄 Sync: {sync_elapsed}\n"
+        f"⏱ รวม: {total_elapsed}\n\n"
+        f"⚠️ <b>อย่าลืม update transaction sheet!</b> คำสั่งนี้ gen เอกสารอย่างเดียว ไม่ได้บันทึกลง Sheet ให้"
+    )
+    log(f"\n✅ เสร็จสิ้น — รวม {total_elapsed}")
+
+    _shutil.rmtree(local_data_root, ignore_errors=True)
+    if local_output:
+        _shutil.rmtree(local_output, ignore_errors=True)
+
+    return result
+
+
+def gen_and_sync() -> dict:
+    """gen ปกติ (ไม่มี scope, ไม่ reset state) แล้ว sync PDF + บันทึก transactions ต่อให้เลย
+    ใช้แทน run() เฉยๆ ตรงๆ — กันบั๊กเดียวกับ regen() (gen แล้วไม่ sync ไม่บันทึก transactions)"""
+    import time
+    from run_pipeline import fmt_duration, sync_output_dir
+    from utils import notify
+    from utils.transactions import append_transactions
+
+    t0 = time.time()
+    result = run()
+    gen_elapsed = fmt_duration(time.time() - t0)
+
+    local_output = result.get("_local_output")
+    pdf_ok = True
+    if local_output:
+        notify.send("🔄 กำลัง sync PDF ขึ้น Drive...")
+        pdf_ok = sync_output_dir(local_output)
+        notify.send("✅ sync PDF เสร็จแล้ว" if pdf_ok else "❌ sync PDF ล้มเหลว — ข้ามบันทึก transactions")
+
+    pending = result.get("_pending_transactions", []) if pdf_ok else []
+    if pending:
+        notify.send(f"📊 กำลัง update transaction sheet ({len(pending)} groups)...")
+        for item in pending:
+            try:
+                append_transactions(
+                    slips=item["slips"],
+                    category=item["category"],
+                    cert_filename=item["cert_filename"],
+                    receipt_filenames=item["receipt_filenames"],
+                )
+            except Exception as e:
+                log(f"   ⚠️  บันทึก transactions ไม่ได้: {e}")
+
+    import shutil as _shutil
+    if local_output:
+        _shutil.rmtree(local_output, ignore_errors=True)
+
+    return result
+
+
 if __name__ == "__main__":
-    import argparse, time, sys
-    from run_pipeline import fmt_duration
+    import argparse, sys
 
     parser = argparse.ArgumentParser(description="Gen PDF ใบรับรองแทนใบเสร็จรับเงิน")
     parser.add_argument(
@@ -723,8 +958,6 @@ if __name__ == "__main__":
         help='บันทึก transactions ใหม่จาก metadata ที่มีอยู่แล้ว ไม่ gen PDF ใหม่ เช่น --transactions-only 2026/JUN'
     )
     args = parser.parse_args()
-
-    from utils import notify
 
     if args.transactions_only:
         sync_transactions_only(args.transactions_only)
@@ -746,106 +979,8 @@ if __name__ == "__main__":
                 else:
                     args.regen = ("day", f"{year_ans}/{month_name}/{int(day_ans):02d}")
 
-    local_data_root = None
-    local_data_path = None
-
     if args.regen:
-        scope_type, scope_value = args.regen
-        log(f"♻️  Regen mode: {scope_type} = {scope_value}")
-        notify.send(f"🚀 Regen เริ่มแล้ว — scope: {scope_value}")
-
-        from utils.state import load_state, save_state, reset_state
-        state = load_state()
-        count = reset_state(state, scope_value)
-        save_state(state)
-        log(f"   Reset {count} groups — กำลัง gen...\n")
-
-        # ── local staging: copy แค่ folder "metadata/" ของ scope นี้มา local ก่อน (เร็วกว่าอ่านจาก
-        # mount ทีละไฟล์) — ไม่เอา images/PDF เก่า/summary.json เพราะ gen_pdf.py ไม่ใช้เลย ──
-        import tempfile
-        local_data_root = Path(tempfile.mkdtemp()) / "regen_data"
-        local_data_root.mkdir(parents=True, exist_ok=True)  # เผื่อ rclone ไม่เจอไฟล์เลยแล้วไม่สร้าง folder ให้
-        log(f"📥 copy metadata scope={scope_value} มา local...")
-        notify.send("📥 กำลัง copy metadata...")
-        # ระบุ pattern ตรงๆ ทุกความลึกที่เป็นไปได้ (scope วัน/เดือน/ปี ทำให้ metadata/ อยู่ลึกไม่เท่ากัน)
-        # ไม่พึ่ง "**/metadata/**" เพราะ rclone ไม่ match กรณี metadata อยู่ที่ root ตรงๆ (scope ระดับวัน)
-        subprocess.run([
-            "rclone", "copy", f"gdrive:SlipProcessor/data/{scope_value}",
-            str(local_data_root / scope_value),
-            "--include", "metadata/**",        # scope = วัน (metadata อยู่ root)
-            "--include", "*/metadata/**",      # scope = เดือน (metadata อยู่ใต้ {day}/)
-            "--include", "*/*/metadata/**",    # scope = ปี (metadata อยู่ใต้ {month}/{day}/)
-            "--transfers", "16", "--checkers", "32", "--fast-list",
-            "--stats", "30s", "-v",
-            "--config", str(Path.home() / ".config/rclone/rclone.conf"),
-        ])
-        notify.send("✅ copy metadata เสร็จแล้ว")
-
-        if not any(local_data_root.iterdir()):
-            msg = f"⚠️ ไม่พบ metadata เลยสำหรับ scope={scope_value} — เช็คว่าวัน/เดือน/ปีถูกต้องไหม (ไม่มีอะไรให้ gen)"
-            log(msg)
-            notify.send(msg)
-            raise SystemExit(0)
-
-        local_data_path = str(local_data_root)
-
-    t_total = time.time()
-
-    log("\n── กำลัง gen PDF ──")
-    notify.send("📄 กำลัง gen PDF...")
-    t0 = time.time()
-    result = run(local_data_path=local_data_path)
-    gen_elapsed = fmt_duration(time.time() - t0)
-    notify.send(f"✅ gen PDF เสร็จแล้ว ({gen_elapsed})")
-
-    # ── sync local_output (PDF) ขึ้น Drive ──
-    local_output = result.get("_local_output")
-    pdf_ok = True
-    sync_elapsed = "0 วิ"
-    if local_output:
-        log("\n── Sync PDFs ขึ้น Drive ──")
-        notify.send("🔄 กำลัง sync PDF ขึ้น Drive...")
-        t0 = time.time()
-        from run_pipeline import sync_output_dir
-        pdf_ok = sync_output_dir(local_output)
-        sync_elapsed = fmt_duration(time.time() - t0)
-        log("   ✅ PDFs synced" if pdf_ok else "   ❌ sync PDFs ล้มเหลว — ข้ามบันทึก transactions")
-        notify.send(f"✅ sync PDF เสร็จแล้ว ({sync_elapsed})" if pdf_ok else "❌ sync PDF ล้มเหลว — ข้ามบันทึก transactions")
-
-    # ── บันทึก transactions ลง Google Sheets (หลัง sync เสร็จ) ──
-    pending = result.get("_pending_transactions", []) if pdf_ok else []
-    t0 = time.time()
-    if pending:
-        log(f"\n── บันทึก Transactions ({len(pending)} groups) ──")
-        notify.send(f"📊 กำลัง update transaction sheet ({len(pending)} groups)...")
-        from utils.transactions import append_transactions
-        for i, item in enumerate(pending, 1):
-            log(f"   📦 [{i}/{len(pending)}] category={item['category']} cert={item['cert_filename']} receipts={list(item['receipt_filenames'].keys())}")
-            try:
-                append_transactions(
-                    slips=item["slips"],
-                    category=item["category"],
-                    cert_filename=item["cert_filename"],
-                    receipt_filenames=item["receipt_filenames"],
-                )
-            except Exception as e:
-                log(f"   ⚠️  บันทึก transactions ไม่ได้: {e}")
-    tx_elapsed = fmt_duration(time.time() - t0)
-    total_elapsed = fmt_duration(time.time() - t_total)
-
-    notify.send(
-        f"✅ Pipeline เสร็จสิ้น (gen_pdf.py)\n"
-        f"📄 gen ใหม่: {result.get('new', 0)}  ❌ ล้มเหลว: {result.get('failed', 0)}\n"
-        f"⏱ Gen: {gen_elapsed}\n"
-        f"🔄 Sync: {sync_elapsed}\n"
-        f"📊 Transactions: {tx_elapsed} ({len(pending)} groups)\n"
-        f"⏱ รวม: {total_elapsed}"
-    )
-    log(f"\n✅ เสร็จสิ้น — รวม {total_elapsed}")
-
-    # ── cleanup temp files ──
-    import shutil as _shutil
-    if local_data_root:
-        _shutil.rmtree(local_data_root, ignore_errors=True)
-    if local_output:
-        _shutil.rmtree(local_output, ignore_errors=True)
+        _, scope_value = args.regen
+        regen(scope_value)
+    else:
+        gen_and_sync()
