@@ -48,7 +48,7 @@ SlipProcessor เป็นระบบอัตโนมัติสำหรั
 │   ├── notify.py                ← Telegram message helpers
 │   ├── state.py                 ← local state (generated_log.json) แทนการเขียนลง Drive
 │   ├── vendor.py                 ← โหลด vendor จาก GSheet + fuzzy match
-│   ├── transactions.py           ← บันทึก transaction ลง Google Sheets พร้อม Drive link
+│   ├── transactions.py           ← บันทึก transaction ลง Google Sheets แบบ 2 phase (insert ก่อน เติม Drive link ทีหลัง) + void_rows_for_scope() สำหรับ /genTransaction
 │   ├── thai_baht_text.py        ← แปลงตัวเลขเป็นข้อความภาษาไทย (บาทถ้วน)
 │   └── logger.py                ← log() = print() พร้อม timestamp
 │
@@ -118,9 +118,11 @@ Mount point บน Pi: `/home/pi/slip-processor/{rawFile,data}` ผ่าน rcl
 
 ### 2. transactions (transaction log / "database")
 - Sheet ID: เก็บใน `config.py` → `TRANSACTIONS_SHEET_ID`
-- Tab `transactions`: คอลัมน์ `date, category, vendor_name, note, amount, has_receipt, img_url, cert_url, receipt_url`
+- Tab `transactions`: คอลัมน์ A-K = `date, category, vendor_name, note, amount, has_receipt, img_url, cert_url, receipt_url, ref, comment`
 - `date` format: `YYYY-MM-DD` (ISO) เพื่อให้ Sheets/Looker Studio detect เป็น date type จริง ไม่ใช่ text
-- เขียนหลัง sync ขึ้น Drive เสร็จแล้วเท่านั้น (ต้องมีไฟล์บน Drive ก่อนถึงจะหา webViewLink ได้)
+- `ref` (คอลัมน์ J) = เลข transaction reference จากธนาคาร ใช้เป็น key จับคู่แถวเดิมตอน re-write (unique 100%, ดู Dedup Logic)
+- `comment` (คอลัมน์ K) = ว่างปกติ ถ้าไม่ว่าง แปลว่าแถวนี้ถูก **void** แล้ว (ดู `/genTransaction` ด้านล่าง) — เก็บยอดเดิม+เวลาที่ void
+- เขียนแบบ **2 phase** (ดู Performance Pattern): phase 1 ใส่ข้อมูลหลัก (date/amount/note/ref) ทันทีโดยเว้น URL ว่างไว้ก่อน (ไม่รอ Drive API) แล้ว phase 2 ค่อยหา `webViewLink` กลับมาเติม G/H/I ทีหลัง — กันปัญหา Drive search ช้าทำให้ข้อมูลเงินช้าตามไปด้วย
 - ใช้สำหรับต่อ Looker Studio ทำ dashboard และ export
 
 ทั้งสอง Sheet share ให้ Service Account เดียวกัน (ดู Credentials ด้านล่าง)
@@ -240,11 +242,12 @@ NOTE_DEFAULT_RECEIPT_TEMPLATE = "ใบสำคัญรับเงิน.docx
 
 Regen แบบ bypass:
 ```bash
-python3 gen_pdf.py --regen year 2026
-python3 gen_pdf.py --regen month 2026/JUN
-python3 gen_pdf.py --regen day 2026/JUN/24
+python3 gen_pdf.py --regen "" 2026
+python3 gen_pdf.py --regen "" 2026/JUN
+python3 gen_pdf.py --regen "" 2026/JUN/24
+python3 gen_pdf.py --transactions-only 2026/JUN   # sync Sheets จาก metadata เดิม ไม่ gen PDF ใหม่
 ```
-หรือผ่าน Telegram: `/genYear -2026`, `/genMonth -2026/JUN`, `/genDay -2026/JUN/24`
+หรือผ่าน Telegram: `/genDoc` (gen เอกสารอย่างเดียว ไม่บันทึก Sheet) / `/genTransaction` (void+insert transaction อย่างเดียว ไม่ gen PDF) — ทั้งคู่เป็น wizard ถามปี(0=ทุกปี)→เดือน(0=ทั้งปี)→วัน(0=ทั้งเดือน) หรือพิมพ์ arg รวดเดียว เช่น `/genDoc 2026 1 7` (ดู Telegram Bot Commands ด้านล่าง — คำสั่งเก่า `/genYear`/`/genMonth`/`/genDay` ถูกลบไปแล้ว แทนที่ด้วยสองคำสั่งนี้)
 
 ---
 
@@ -260,6 +263,12 @@ python3 gen_pdf.py --regen day 2026/JUN/24
 ```
 
 ผลจากการ refactor ตาม pattern นี้: 7 นาที 54 วิ → 2 นาที 25 วิ (เร็วขึ้น ~3 เท่า) สำหรับ 16 รูป
+
+หลักการเดียวกันนี้ใช้กับ Google Sheets API ด้วย ไม่ใช่แค่ rclone: `utils/transactions.py`'s
+`append_transactions()` เขียนข้อมูลหลัก (date/amount/note/ref) ลง Sheet **ก่อน** โดยเว้น URL
+ว่างไว้ (ไม่มี Drive API call เลยตอนนี้ เร็วมาก) แล้วค่อยไปหา `webViewLink` จาก Drive แล้วย้อนกลับ
+มา `batch_update()` เติม G/H/I ทีหลัง (phase 2) — ถ้า phase 2 ล้มเหลว/ช้า ข้อมูลเงินก็ปลอดภัย
+อยู่ใน Sheet แล้วตั้งแต่ phase 1
 
 ลบไฟล์บน Drive: ใช้ `rclone delete --include "*.pdf"` ไม่ใช่ `Path.unlink()` ผ่าน mount
 `shutil.copy2()` ใช้ไม่ได้กับ rclone mount (ไม่ support xattr, จะ error `OSError: [Errno 5]`)
@@ -291,15 +300,18 @@ APIs ที่ต้อง enable บน Google Cloud Console: **Google Sheets A
 
 | คำสั่ง | ทำอะไร |
 |--------|--------|
-| `/run` | sort + gen + sync ทั้งหมด |
+| `/run` | sort + gen + sync + บันทึก transactions ทั้งหมด |
 | `/sort` | sort เท่านั้น |
-| `/gen` | gen PDF เท่านั้น (เฉพาะที่ยังไม่ gen) |
-| `/genYear -2026` | regen ทั้งปี (bypass state) |
-| `/genMonth -2026/JUN` | regen ทั้งเดือน |
-| `/genDay -2026/JUN/24` | regen วันเดียว |
+| `/gen` | gen PDF เท่านั้น (เฉพาะที่ยังไม่ gen) sync + บันทึก transactions ให้ด้วย |
+| `/genDoc [ปี] [เดือน] [วัน]` | regen เอกสาร (PDF) เท่านั้น ตาม scope (0=ทั้งหมดในระดับนั้น, ไม่ระบุ arg = wizard) — **ไม่บันทึก Sheet** เตือนให้ update เองทีหลัง |
+| `/genTransaction [ปี] [เดือน] [วัน]` | void แถวเดิมที่ live อยู่ใน scope (zero amount + comment เก็บยอดเดิม + ไฮไลต์แดง แถวที่ comment ไม่ว่างแล้วจะข้ามไม่ void ซ้ำ) แล้ว insert transaction ใหม่จาก metadata ต่อท้าย — **ไม่ gen PDF** |
 | `/reloadvendor` | โหลด vendor list จาก GSheet ใหม่ (ปกติ auto reload ทุกครั้งที่ sort อยู่แล้ว) |
 | `/status` | เช็ค mount Pi |
 | `/help` | แสดงคำสั่งทั้งหมด |
+
+ทั้ง `/genDoc` และ `/genTransaction` ใช้ wizard concept เดียวกัน (ปี 0=ทุกปี → เดือน 0=ทั้งปี → วัน 0=ทั้งเดือน)
+implement ใน `telegram_bot.py` เป็น flow กลาง `"scope_cmd"` (เดิมชื่อ `"gendoc"`) ใช้ร่วมกันทั้งสองคำสั่ง
+ผ่าน `PENDING["cmd"]`/`PENDING["label"]` — ถ้าจะเพิ่มคำสั่ง scope-wizard ใหม่ ให้ reuse flow นี้ ไม่ต้องเขียนใหม่
 
 Bot รันเป็น systemd service (`slip-bot.service`) ใช้ polling ไม่ใช่ webhook
 แก้ `telegram_bot.py` แล้วต้อง `sudo systemctl restart slip-bot.service` เสมอ

@@ -6,6 +6,7 @@ telegram_bot.py — รับคำสั่งจาก Telegram แล้ว�
   /sort [เดือน] [ปี] — รัน sort_slips เท่านั้น
   /gen               — รัน gen_pdf เท่านั้น (sync + บันทึก transactions ให้ด้วย)
   /genDoc [ปี] [เดือน] [วัน] — gen เอกสารใหม่เท่านั้น (0=ทั้งหมดในระดับนั้น) ไม่บันทึก transactions
+  /genTransaction [ปี] [เดือน] [วัน] — void แถวเดิม + insert transaction ใหม่จาก metadata (0=ทั้งหมดในระดับนั้น)
   /status — เช็คสถานะ mount
   /help   — ดูคำสั่งทั้งหมด
 """
@@ -199,6 +200,26 @@ def do_gendoc(scope: str):
             RUNNING_SINCE = None
 
 
+def do_gentransaction(scope: str):
+    """
+    void แถวเดิมที่ live อยู่ใน scope นี้ (zero amount + comment เก็บยอดเดิม + ไฮไลต์แดง)
+    แล้ว insert transaction ใหม่จาก metadata ต่อท้าย (gen_pdf.gen_transaction() แจ้งผลเองตอนจบ)
+    """
+    global RUNNING
+    try:
+        import gen_pdf
+        gen_pdf.gen_transaction(scope)
+    except Exception as e:
+        import traceback
+        send(f"❌ เกิดข้อผิดพลาด\n<code>{e}</code>")
+        log(traceback.format_exc())
+    finally:
+        global RUNNING, RUNNING_SINCE
+        with LOCK:
+            RUNNING = False
+            RUNNING_SINCE = None
+
+
 def run_command(cmd: str, extra: str = "", month: int | None = None, year: int | None = None):
     global RUNNING, RUNNING_SINCE
     with LOCK:
@@ -214,6 +235,8 @@ def run_command(cmd: str, extra: str = "", month: int | None = None, year: int |
 
     if cmd == "/gendoc":
         t = threading.Thread(target=do_gendoc, args=(extra,), daemon=True)
+    elif cmd == "/gentransaction":
+        t = threading.Thread(target=do_gentransaction, args=(extra,), daemon=True)
     else:
         t = threading.Thread(target=do_run, args=(cmd, month, year), daemon=True)
     t.start()
@@ -231,7 +254,14 @@ def start_month_wizard(cmd: str):
 def start_gendoc_wizard():
     """ใช้กับ /genDoc — ถามปี (0=ทุกปี) → เดือน (0=ทั้งปี) → วัน (0=ทั้งเดือน)"""
     global PENDING
-    PENDING = {"flow": "gendoc", "step": "year"}
+    PENDING = {"flow": "scope_cmd", "cmd": "/gendoc", "label": "gen เอกสาร", "step": "year"}
+    send("ระบุปี (กรณีต้องการทุกปี ใส่ 0) >")
+
+
+def start_gentransaction_wizard():
+    """ใช้กับ /genTransaction — ถามปี (0=ทุกปี) → เดือน (0=ทั้งปี) → วัน (0=ทั้งเดือน)"""
+    global PENDING
+    PENDING = {"flow": "scope_cmd", "cmd": "/gentransaction", "label": "gen transaction", "step": "year"}
     send("ระบุปี (กรณีต้องการทุกปี ใส่ 0) >")
 
 
@@ -264,8 +294,10 @@ def handle_pending(text: str):
         run_command(cmd, month=(month or None))
         return
 
-    if flow == "gendoc":
-        step = PENDING["step"]
+    if flow == "scope_cmd":
+        step  = PENDING["step"]
+        cmd   = PENDING["cmd"]
+        label = PENDING["label"]
 
         if step == "year":
             if not text.isdigit():
@@ -274,8 +306,8 @@ def handle_pending(text: str):
             year = int(text)
             if year == 0:
                 PENDING = None
-                send("▶ gen เอกสารทุกปีทั้งหมด")
-                run_command("/gendoc", "")
+                send(f"▶ {label}ทุกปีทั้งหมด")
+                run_command(cmd, "")
                 return
             PENDING["year"] = year
             PENDING["step"] = "month"
@@ -291,8 +323,8 @@ def handle_pending(text: str):
             if month == 0:
                 scope = _gendoc_scope(year)
                 PENDING = None
-                send(f"▶ gen เอกสารทั้งปี {scope}")
-                run_command("/gendoc", scope)
+                send(f"▶ {label}ทั้งปี {scope}")
+                run_command(cmd, scope)
                 return
             PENDING["month"] = month
             PENDING["step"] = "day"
@@ -308,8 +340,8 @@ def handle_pending(text: str):
             month = PENDING["month"]
             PENDING = None
             scope = _gendoc_scope(year, month, day)
-            send(f"▶ gen เอกสาร {scope}")
-            run_command("/gendoc", scope)
+            send(f"▶ {label} {scope}")
+            run_command(cmd, scope)
             return
 
 
@@ -343,6 +375,14 @@ def handle_command(text: str):
             run_command(cmd, _gendoc_scope(year, month, day))
         else:
             start_gendoc_wizard()
+    elif cmd == "/gentransaction":
+        if len(parts) > 1 and parts[1].lstrip("-").isdigit():
+            year  = int(parts[1].lstrip("-"))
+            month = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+            day   = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+            run_command(cmd, _gendoc_scope(year, month, day))
+        else:
+            start_gentransaction_wizard()
     elif cmd == "/help":
         send(
             "📋 <b>คำสั่งที่ใช้ได้</b>\n"
@@ -353,6 +393,10 @@ def handle_command(text: str):
             "/genDoc — gen เอกสารใหม่ (ถามปี[0=ทุกปี]→เดือน[0=ทั้งปี]→วัน[0=ทั้งเดือน] ทีละขั้น)\n"
             "          <b>ไม่บันทึก transactions</b> — ต้อง update sheet เองทีหลัง\n"
             "          หรือพิมพ์ /genDoc 2026 1 7 ตรงๆ (ปี เดือน วัน) ก็ได้\n"
+            "/genTransaction — void แถวเดิมที่ยัง live ใน scope (ไม่ลบ แค่ zero amount + comment "
+            "เก็บยอดเดิม + ไฮไลต์แดง) แล้ว insert transaction ใหม่จาก metadata ต่อท้าย\n"
+            "          ถามปี[0=ทุกปี]→เดือน[0=ทั้งปี]→วัน[0=ทั้งเดือน] ทีละขั้น หรือพิมพ์ "
+            "/genTransaction 2026 1 7 ตรงๆ ก็ได้\n"
             "/reloadvendor — โหลด vendor จาก GSheet ใหม่\n"
             "/status       — เช็คสถานะ mount\n"
             "/help         — แสดงคำสั่ง"

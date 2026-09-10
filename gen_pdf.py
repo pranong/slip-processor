@@ -706,6 +706,38 @@ def sync_transactions_only(scope: str) -> dict:
     return {"groups": groups_done}
 
 
+def gen_transaction(scope_value: str) -> dict:
+    """
+    /genTransaction — void แถวเดิมที่ยัง live ใน scope นี้ (ไม่ลบ แค่ zero amount + comment +
+    ไฮไลต์แดง เก็บ audit trail) แล้วอ่าน metadata ของ scope เดิม insert เป็นแถวใหม่ต่อท้าย
+    (ผ่าน sync_transactions_only ซึ่งตอนนี้เป็น 2-phase อยู่แล้ว: ใส่ข้อมูลหลักก่อน ไม่รอ URL
+    Drive ให้ช้า แล้วค่อยกลับมาเติม URL ทีหลัง)
+
+    scope_value: "" = ทุกปี, "2026" = ทั้งปี, "2026/JAN" = ทั้งเดือน, "2026/JAN/07" = วันเดียว
+    """
+    from utils import notify
+    from utils.transactions import void_rows_for_scope
+
+    label = scope_value or "ทั้งหมด (ทุกปี)"
+    log(f"♻️  Gen transaction: scope = {label}")
+    notify.send(f"🚀 เริ่ม gen transaction — scope: {label}")
+
+    voided = void_rows_for_scope(scope_value)
+    log(f"   🔴 void แถวเดิม {voided} แถว")
+
+    result = sync_transactions_only(scope_value)
+
+    notify.send(
+        f"✅ insert row complete (scope: {label})\n"
+        f"🔴 void แถวเดิม: {voided} แถว\n"
+        f"➕ insert groups ใหม่: {result.get('groups', 0)}\n\n"
+        f"🔗 URL (img/cert/receipt) ถูกเติมให้อัตโนมัติแล้ว"
+    )
+    log(f"\n✅ เสร็จสิ้น gen transaction — scope: {label}")
+
+    return {"voided": voided, **result}
+
+
 def regen(scope_value: str) -> dict:
     """
     Regen แบบเต็ม: reset state → copy metadata มา local ก่อน → gen PDF → sync PDF ขึ้น Drive →
