@@ -738,6 +738,21 @@ def gen_transaction(scope_value: str) -> dict:
     return {"voided": voided, **result}
 
 
+def _stash_failed_sync(source: str, local_output: str, pending_transactions: list):
+    """
+    sync PDF ขึ้น Drive ไม่ผ่าน → ย้าย PDF ออกจาก /tmp ไปเก็บใน data/pending_sync/ พร้อม pending
+    transactions แล้วแจ้งให้สั่ง /resync — ไม่งั้น PDF โดน rmtree ทิ้งตอนจบ ทั้งที่ generated_log.json
+    mark ว่า gen ไปแล้ว (/gen รอบหน้าจะข้าม ไฟล์เลยไม่มีวันขึ้น Drive)
+    """
+    from utils import notify, pending_sync
+    batch = pending_sync.stash(source, local_output=local_output,
+                               pending_transactions=pending_transactions)
+    extra = "ยังไม่ได้บันทึก transactions\n" if pending_transactions else ""
+    msg = pending_sync.fail_message(source, batch, extra=extra)
+    log(f"   {msg}")
+    notify.send(msg)
+
+
 def regen(scope_value: str) -> dict:
     """
     Regen แบบเต็ม: reset state → copy metadata มา local ก่อน → gen PDF → sync PDF ขึ้น Drive →
@@ -806,7 +821,10 @@ def regen(scope_value: str) -> dict:
         pdf_ok = sync_output_dir(local_output)
         sync_elapsed = fmt_duration(time.time() - t0)
         log("   ✅ PDFs synced" if pdf_ok else "   ❌ sync PDFs ล้มเหลว — ข้ามบันทึก transactions")
-        notify.send(f"✅ sync PDF เสร็จแล้ว ({sync_elapsed})" if pdf_ok else "❌ sync PDF ล้มเหลว — ข้ามบันทึก transactions")
+        if pdf_ok:
+            notify.send(f"✅ sync PDF เสร็จแล้ว ({sync_elapsed})")
+        else:
+            _stash_failed_sync(f"regen {scope_value}", local_output, result.get("_pending_transactions", []))
 
     pending = result.get("_pending_transactions", []) if pdf_ok else []
     t0 = time.time()
@@ -913,7 +931,11 @@ def gen_docs_only(scope_value: str) -> dict:
         pdf_ok = sync_output_dir(local_output)
         sync_elapsed = fmt_duration(time.time() - t0)
         log("   ✅ PDFs synced" if pdf_ok else "   ❌ sync PDFs ล้มเหลว")
-        notify.send(f"✅ sync PDF เสร็จแล้ว ({sync_elapsed})" if pdf_ok else "❌ sync PDF ล้มเหลว")
+        if pdf_ok:
+            notify.send(f"✅ sync PDF เสร็จแล้ว ({sync_elapsed})")
+        else:
+            # /genDoc ไม่บันทึก transactions อยู่แล้ว — เก็บแค่ PDF ไว้ให้ /resync
+            _stash_failed_sync(f"/genDoc {label}", local_output, [])
 
     total_elapsed = fmt_duration(time.time() - t_total)
 
@@ -951,7 +973,10 @@ def gen_and_sync() -> dict:
     if local_output:
         notify.send("🔄 กำลัง sync PDF ขึ้น Drive...")
         pdf_ok = sync_output_dir(local_output)
-        notify.send("✅ sync PDF เสร็จแล้ว" if pdf_ok else "❌ sync PDF ล้มเหลว — ข้ามบันทึก transactions")
+        if pdf_ok:
+            notify.send("✅ sync PDF เสร็จแล้ว")
+        else:
+            _stash_failed_sync("/gen", local_output, result.get("_pending_transactions", []))
 
     pending = result.get("_pending_transactions", []) if pdf_ok else []
     if pending:

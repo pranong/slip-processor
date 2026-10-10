@@ -61,6 +61,7 @@ receipt_url, ref, comment` — `ref` (J) ใช้จับคู่แถวเ
 | `/run` | sort + gen + sync + บันทึก transactions ทั้งหมด |
 | `/genDoc [ปี] [เดือน] [วัน]` | regen เอกสาร (PDF) เท่านั้น — **ไม่บันทึก Sheet** |
 | `/genTransaction [ปี] [เดือน] [วัน]` | void แถวเดิมที่ live (zero amount + comment + ไฮไลต์แดง) แล้ว insert ใหม่จาก metadata — **ไม่ gen PDF** |
+| `/resync` | sync งานที่ค้างใน `data/pending_sync/` ขึ้น Drive ใหม่ (หลัง sync ไม่ผ่าน) แล้วลบ rawFile เฉพาะรูปของรอบนั้น + บันทึก transactions ต่อให้ครบ — **ไม่อ่านสลิปซ้ำ** |
 
 ทั้ง `/genDoc`/`/genTransaction` ใช้ wizard เดียวกัน (ปี 0=ทุกปี→เดือน 0=ทั้งปี→วัน 0=ทั้งเดือน)
 implement เป็น flow กลาง `"scope_cmd"` ใน [telegram_bot.py](telegram_bot.py) — เพิ่มคำสั่ง
@@ -85,6 +86,9 @@ mountpoint /home/pi/slip-processor/rawFile
 - `shutil.copy2()` พังบน rclone mount (ไม่ support xattr) → ใช้ `shutil.copy()` เท่านั้น
 - Telegram group chat Privacy Mode บล็อก plain-text reply ของ wizard → ต้อง `/setprivacy` Disable ผ่าน @BotFather
 - Drive API 403 quota exceeded จาก mount poll ถี่เกินไป → ปรับ `--poll-interval` ให้ยาวขึ้น/ปิด
-- sync ขึ้น Drive fail กลางทาง → `rawFile` ปลอดภัยเสมอ (ไม่ลบจนกว่า sync สำเร็จ) แต่ local temp
-  (`/tmp/tmpXXXXXXXX/{data,output}`) ที่ sort/gen เสร็จแล้วไม่ถูกลบตอน sync fail — sync ไฟล์เดิม
-  ขึ้น Drive ตรงๆ ได้โดยไม่ต้องอ่านสลิปใหม่ (ประหยัด API)
+- sync ขึ้น Drive fail กลางทาง → `rawFile` ปลอดภัยเสมอ (ไม่ลบจนกว่า sync สำเร็จ) และ local temp
+  ที่ sort/gen เสร็จแล้วถูกย้ายจาก `/tmp` ไปเก็บที่ `data/pending_sync/<timestamp>/{data,output}`
+  + `manifest.json` (บน disk ของ Pi ไม่ใช่ mount, ไม่หายตอน reboot) ดู [utils/pending_sync.py](utils/pending_sync.py)
+  → สั่ง `/resync` (หรือ `python3 run_pipeline.py --resync`) เพื่อ sync ไฟล์เดิมขึ้น Drive โดยไม่ต้อง
+  อ่านสลิปใหม่ (ประหยัด API) และ**ไม่ต้องล้าง `processed_refs.json`** — ทุกคำสั่งที่ sync ขึ้น Drive
+  (`/run`, `/gen`, `/genDoc`) ใช้กลไกเดียวกัน ถ้าเพิ่มคำสั่งใหม่ที่ sync ให้เรียก `pending_sync.stash()` ตอน fail ด้วย

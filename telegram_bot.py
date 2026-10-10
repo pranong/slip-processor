@@ -7,6 +7,7 @@ telegram_bot.py — รับคำสั่งจาก Telegram แล้ว�
   /gen               — รัน gen_pdf เท่านั้น (sync + บันทึก transactions ให้ด้วย)
   /genDoc [ปี] [เดือน] [วัน] — gen เอกสารใหม่เท่านั้น (0=ทั้งหมดในระดับนั้น) ไม่บันทึก transactions
   /genTransaction [ปี] [เดือน] [วัน] — void แถวเดิม + insert transaction ใหม่จาก metadata (0=ทั้งหมดในระดับนั้น)
+  /resync — sync งานที่ค้างใน data/pending_sync/ ขึ้น Drive ใหม่ (หลัง sync ไม่ผ่าน)
   /status — เช็คสถานะ mount
   /help   — ดูคำสั่งทั้งหมด
 """
@@ -61,6 +62,10 @@ def check_mounts() -> str:
         f"data    : {'✅ mounted' if data_ok else '❌ ไม่ได้ mount'}",
         f"เวลา    : {datetime.now().strftime('%H:%M:%S')}",
     ]
+    from utils import pending_sync
+    pending = pending_sync.list_batches()
+    if pending:
+        lines.append(f"📦 ค้าง sync : {len(pending)} batch — พิมพ์ /resync")
     return "\n".join(lines)
 
 
@@ -168,6 +173,11 @@ def do_run(cmd: str, month: int | None = None, year: int | None = None):
             # run_pipeline.main() ส่ง notify.send() ของตัวเองอยู่แล้ว (Telegram bot เดียวกัน)
             from run_pipeline import main as run_pipeline_main
             run_pipeline_main(expected_month=month, expected_year=year)
+
+        elif cmd == "/resync":
+            # resync() แจ้งผลผ่าน notify.send() เองทุกขั้น เหมือน run_pipeline.main()
+            from run_pipeline import resync
+            resync()
 
     except Exception as e:
         import traceback
@@ -365,7 +375,7 @@ def handle_command(text: str):
             run_command(cmd, month=month, year=year)
         else:
             start_month_wizard(cmd)
-    elif cmd == "/gen":
+    elif cmd in ("/gen", "/resync"):
         run_command(cmd)
     elif cmd == "/gendoc":
         if len(parts) > 1 and parts[1].lstrip("-").isdigit():
@@ -397,6 +407,8 @@ def handle_command(text: str):
             "เก็บยอดเดิม + ไฮไลต์แดง) แล้ว insert transaction ใหม่จาก metadata ต่อท้าย\n"
             "          ถามปี[0=ทุกปี]→เดือน[0=ทั้งปี]→วัน[0=ทั้งเดือน] ทีละขั้น หรือพิมพ์ "
             "/genTransaction 2026 1 7 ตรงๆ ก็ได้\n"
+            "/resync — sync งานที่ค้างขึ้น Drive ใหม่ (ใช้หลังเจอ 🔴 Sync ไม่สำเร็จ) "
+            "ไม่อ่านสลิปซ้ำ แล้วลบ rawFile + บันทึก transactions ต่อให้ครบ\n"
             "/reloadvendor — โหลด vendor จาก GSheet ใหม่\n"
             "/status       — เช็คสถานะ mount\n"
             "/help         — แสดงคำสั่ง"

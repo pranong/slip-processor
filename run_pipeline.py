@@ -133,6 +133,131 @@ def sync_to_drive(local_dir: str) -> bool:
 sync_output_dir = sync_to_drive
 
 
+def delete_raw_files(names: list[str]) -> bool:
+    """
+    ลบรูปใน rawFile เฉพาะชื่อที่ระบุ (ใช้ตอน /resync) — ไม่ใช้ clear_raw_files() เพราะตัวนั้นลบ
+    ทั้ง rawFile ซึ่งระหว่างรอ resync ผู้ใช้อาจโยนสลิปใหม่ที่ยังไม่ได้ประมวลผลเข้ามาแล้ว
+    """
+    import subprocess, tempfile
+    if not names:
+        return True
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        f.write("\n".join(names) + "\n")
+        list_path = f.name
+    try:
+        result = subprocess.run([
+            "rclone", "delete", "gdrive:SlipProcessor/rawFile",
+            "--files-from", list_path,
+            "--checkers", "32",
+            "--config", str(Path.home() / ".config/rclone/rclone.conf"),
+        ], capture_output=True, text=True)
+    finally:
+        Path(list_path).unlink(missing_ok=True)
+    if result.returncode != 0:
+        log(f"⚠️  ลบ rawFile error: {result.stderr[:200]}")
+        return False
+    log(f"🗑️  ลบรูปใน rawFile ของรอบนี้แล้ว ({len(names)} ไฟล์)")
+    return True
+
+
+def resync() -> dict:
+    """
+    Sync งานที่ค้างใน data/pending_sync/ ขึ้น Drive ใหม่ (ดู utils/pending_sync.py) ทีละ batch
+    เก่า → ใหม่ แล้วทำขั้นตอนที่ pipeline ข้ามไปตอน sync fail ให้ครบ: ลบ rawFile + บันทึก transactions
+    batch ไหน sync ไม่ผ่านอีกจะถูกเก็บไว้เหมือนเดิม สั่ง /resync ซ้ำได้เรื่อยๆ
+    (rclone copy ทับไฟล์เดิม, append_transactions จับคู่ด้วย ref — ทำซ้ำไม่เบิ้ล)
+    """
+    import time, shutil
+    from utils import pending_sync
+    from utils.transactions import append_transactions
+
+    batches = pending_sync.list_batches()
+    if not batches:
+        msg = "ℹ️ ไม่มีงานค้าง sync"
+        log(msg)
+        notify.send(msg)
+        return {"ok": 0, "failed": 0}
+
+    t_total = time.time()
+    notify.send(f"🔄 Resync เริ่มแล้ว — {len(batches)} batch")
+    ok = failed = 0
+
+    for batch in batches:
+        manifest = pending_sync.load_manifest(batch)
+        label = f"{batch.name} ({manifest.get('source', '?')})"
+        log(f"\n── Resync {label} ──")
+        notify.send(f"📦 {label} — {pending_sync.count_files(batch)} ไฟล์")
+
+        # sync data (รูป + metadata) ก่อน PDF เหมือน pipeline ปกติ — synced แล้วลบ folder นั้นทิ้งเลย
+        # รอบหน้าถ้า PDF ยัง fail จะได้ไม่ต้อง upload รูปซ้ำ
+        synced = True
+        for name in ("data", "output"):
+            part = batch / name
+            if not part.exists():
+                continue
+            if sync_to_drive(str(part)):
+                log(f"   ✅ {name} synced")
+                shutil.rmtree(part, ignore_errors=True)
+            else:
+                log(f"   ❌ sync {name} ล้มเหลว")
+                synced = False
+                break
+
+        if not synced:
+            failed += 1
+            notify.send(f"🔴 {label} sync ยังไม่ผ่าน — เก็บไว้เหมือนเดิม ลอง /resync ใหม่ทีหลัง")
+            continue
+
+        # ลบ rawFile + บันทึก transactions ทำครั้งเดียวพอ — เก็บสถานะลง manifest กันทำซ้ำ
+        # ถ้า batch นี้ต้อง /resync อีกรอบเพราะขั้นตอนหลังๆ พัง
+        raw_files = manifest.get("raw_files", [])
+        raw_ok = True
+        if raw_files:
+            notify.send(f"🗑 กำลังลบ rawFile ({len(raw_files)} ไฟล์)...")
+            raw_ok = delete_raw_files(raw_files)
+            if raw_ok:
+                manifest["raw_files"] = []
+                pending_sync.save_manifest(batch, manifest)
+
+        pending = manifest.get("pending_transactions", [])
+        tx_failed = []
+        if pending:
+            notify.send(f"📊 กำลัง update transaction sheet ({len(pending)} groups)...")
+            for i, item in enumerate(pending, 1):
+                log(f"   📦 [{i}/{len(pending)}] category={item['category']} cert={item['cert_filename']}")
+                try:
+                    append_transactions(
+                        slips=item["slips"],
+                        category=item["category"],
+                        cert_filename=item["cert_filename"],
+                        receipt_filenames=item["receipt_filenames"],
+                    )
+                except Exception as e:
+                    log(f"   ⚠️  บันทึก transactions ไม่ได้: {e}")
+                    tx_failed.append(item)
+            manifest["pending_transactions"] = tx_failed
+            pending_sync.save_manifest(batch, manifest)
+
+        if raw_ok and not tx_failed:
+            pending_sync.remove(batch)
+            ok += 1
+            notify.send(f"✅ {label} เสร็จ")
+        else:
+            failed += 1
+            problems = []
+            if not raw_ok:
+                problems.append("ลบ rawFile ไม่ได้")
+            if tx_failed:
+                problems.append(f"บันทึก transactions ไม่ได้ {len(tx_failed)} groups")
+            notify.send(f"⚠️ {label} ไฟล์ขึ้น Drive แล้ว แต่{' และ'.join(problems)} — ลอง /resync ใหม่")
+
+    elapsed = fmt_duration(time.time() - t_total)
+    msg = f"{'✅' if failed == 0 else '⚠️'} Resync จบ — สำเร็จ {ok} batch, ค้าง {failed} batch ({elapsed})"
+    log(f"\n{msg}")
+    notify.send(msg)
+    return {"ok": ok, "failed": failed}
+
+
 def check_mounts() -> bool:
     raw_ok  = Path(RAW_MOUNT).exists() and Path(RAW_MOUNT).is_dir()
     data_ok = Path(DATA_MOUNT).exists() and Path(DATA_MOUNT).is_dir()
@@ -272,10 +397,19 @@ def main(expected_month: int | None = None, expected_year: int | None = None):
     sync_elapsed = fmt_duration(time.time() - t_sync)
 
     if not (data_ok and pdf_ok):
-        msg = (f"🔴 Sync ขึ้น Drive ไม่สำเร็จ ({sync_elapsed}) — "
-               f"ข้าม clear rawFile และ บันทึก transactions เพื่อกันข้อมูลเพี้ยน "
-               f"รูปต้นฉบับใน rawFile ยังไม่ถูกลบ ปลอดภัย แต่ ref ของสลิปกลุ่มนี้ถูกบันทึกไปแล้วตอน sort "
-               f"ต้องล้าง data/processed_refs.json (หรือรัน scripts/reset.sh) ก่อน rerun ไม่งั้นจะโดนเข้าใจว่าซ้ำ")
+        # ย้ายออกจาก /tmp ไปเก็บใน data/pending_sync/ (ไม่หายตอน reboot) แล้วให้ /resync ทำต่อ:
+        # sync → ลบ rawFile เฉพาะรูปของรอบนี้ → บันทึก transactions — ไม่ต้องอ่านสลิปใหม่
+        # และไม่ต้องล้าง processed_refs.json (ref ถูกบันทึกไปแล้วตอน sort ถูกต้องอยู่แล้ว)
+        from utils import pending_sync
+        raw_files = [d["file"] for d in sort_result.get("details", []) if d.get("file")]
+        batch = pending_sync.stash(
+            "/run", local_data=local_data, local_output=local_output,
+            pending_transactions=gen_result.get("_pending_transactions", []),
+            raw_files=raw_files,
+        )
+        msg = pending_sync.fail_message(
+            "/run", batch,
+            extra="รูปต้นฉบับใน rawFile ยังไม่ถูกลบ และยังไม่ได้บันทึก transactions\n")
         log(f"\n{msg}")
         notify.send(msg)
         return
@@ -327,10 +461,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Sort + gen PDF ทั้ง pipeline")
     parser.add_argument("--month", type=int, help="เดือนที่คาดว่าจะเจอ (1-12) — ไม่ตรงจะแยกไปตรวจมือ")
     parser.add_argument("--year", type=int, help="ปี ค.ศ. ที่คาดว่าจะเจอ (ไม่บังคับ)")
+    parser.add_argument("--resync", action="store_true",
+                        help="sync งานที่ค้างใน data/pending_sync/ ขึ้น Drive ใหม่ (ไม่ sort/gen)")
     args = parser.parse_args()
     month, year = args.month, args.year
 
     already_detached = os.environ.get("SLIP_PIPELINE_DETACHED") == "1"
+
+    if args.resync:
+        if not already_detached:
+            script = str(Path(CODE_DIR) / "scripts" / "run_safe.sh")
+            os.execvp("bash", ["bash", script, "python3", __file__, "--resync"])
+        resync()
+        sys.exit(0)
 
     # ── ถามเดือนแบบ interactive ถ้าไม่ได้ใส่ --month มา และเป็น terminal จริงๆ (ไม่ใช่ cron/detached) ──
     # ต้องถามตรงนี้ก่อน re-exec เพราะพอ detach ไปแล้ว stdin จะถูก redirect เป็น /dev/null ถามไม่ได้อีก
