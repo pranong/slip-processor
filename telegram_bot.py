@@ -3,8 +3,7 @@ from utils.logger import log
 telegram_bot.py — รับคำสั่งจาก Telegram แล้วรัน pipeline
 คำสั่งที่รองรับ (พิมพ์เปล่าๆ = บอทถามทีละคำถามเป็น wizard, หรือพิมพ์ arg รวดเดียวก็ได้):
   /run [เดือน] [ปี]  — รัน pipeline ทั้งหมด (sort + gen)
-  /sort [เดือน] [ปี] — รัน sort_slips เท่านั้น
-  /gen               — รัน gen_pdf เท่านั้น (sync + บันทึก transactions ให้ด้วย)
+  /gen [ปี] [เดือน] [วัน] — /genDoc + /genTransaction ในคำสั่งเดียว (0=ทั้งหมดในระดับนั้น)
   /genDoc [ปี] [เดือน] [วัน] — gen เอกสารใหม่เท่านั้น (0=ทั้งหมดในระดับนั้น) ไม่บันทึก transactions
   /genTransaction [ปี] [เดือน] [วัน] — void แถวเดิม + insert transaction ใหม่จาก metadata (0=ทั้งหมดในระดับนั้น)
   /resync — sync งานที่ค้างใน data/pending_sync/ ขึ้น Drive ใหม่ (หลัง sync ไม่ผ่าน)
@@ -148,26 +147,7 @@ def do_run(cmd: str, month: int | None = None, year: int | None = None):
     from datetime import datetime
 
     try:
-        if cmd == "/sort":
-            t0 = time.time()
-            month_note = f" (คาดเดือน {month}{f'/{year}' if year else ''})" if month else ""
-            send(f"🚀 Sort เริ่มแล้ว{month_note} — {datetime.now().strftime('%H:%M:%S')}")
-            result = sort_slips.run(expected_month=month, expected_year=year)
-            from utils.vendor import reload_vendors
-            reload_vendors()
-            elapsed = fmt_duration(time.time() - t0)
-            send_sort_summary(result, elapsed)
-
-        elif cmd == "/gen":
-            # gen_and_sync() ทำ sync PDF + บันทึก transactions ให้ในตัวด้วย (ไม่ใช่แค่ gen เฉยๆ
-            # เหมือนก่อนหน้าที่เรียก run() ตรงๆ แล้วไม่เคย sync/บันทึกอะไรเลย)
-            t0 = time.time()
-            send(f"🚀 Gen PDF เริ่มแล้ว — {datetime.now().strftime('%H:%M:%S')}")
-            result = gen_pdf.gen_and_sync()
-            elapsed = fmt_duration(time.time() - t0)
-            send_gen_summary(result, elapsed)
-
-        elif cmd == "/run":
+        if cmd == "/run":
             # เรียก run_pipeline.main() ตรงๆ แทนการ duplicate logic เอง — กัน sort/gen ผ่าน
             # Telegram แล้วไม่ sync ขึ้น Drive / ลบ rawFile ทั้งที่ยังไม่ sync (บั๊กที่เจอมาก่อนหน้า)
             # run_pipeline.main() ส่ง notify.send() ของตัวเองอยู่แล้ว (Telegram bot เดียวกัน)
@@ -199,6 +179,26 @@ def do_gendoc(scope: str):
     try:
         import gen_pdf
         gen_pdf.gen_docs_only(scope)
+    except Exception as e:
+        import traceback
+        send(f"❌ เกิดข้อผิดพลาด\n<code>{e}</code>")
+        log(traceback.format_exc())
+    finally:
+        global RUNNING, RUNNING_SINCE
+        with LOCK:
+            RUNNING = False
+            RUNNING_SINCE = None
+
+
+def do_gen(scope: str):
+    """
+    /gen — gen เอกสาร (เหมือน /genDoc) แล้วต่อด้วย void + insert transaction (เหมือน /genTransaction)
+    scope เดียวกัน (gen_pdf.gen_doc_and_transaction() แจ้งผลเองทุกขั้น)
+    """
+    global RUNNING
+    try:
+        import gen_pdf
+        gen_pdf.gen_doc_and_transaction(scope)
     except Exception as e:
         import traceback
         send(f"❌ เกิดข้อผิดพลาด\n<code>{e}</code>")
@@ -245,6 +245,8 @@ def run_command(cmd: str, extra: str = "", month: int | None = None, year: int |
 
     if cmd == "/gendoc":
         t = threading.Thread(target=do_gendoc, args=(extra,), daemon=True)
+    elif cmd == "/gen":
+        t = threading.Thread(target=do_gen, args=(extra,), daemon=True)
     elif cmd == "/gentransaction":
         t = threading.Thread(target=do_gentransaction, args=(extra,), daemon=True)
     else:
@@ -255,7 +257,7 @@ def run_command(cmd: str, extra: str = "", month: int | None = None, year: int |
 # ── Wizard: ถามทีละคำถามแทนต้องพิมพ์ arg รวดเดียว ────────────────────────────────
 
 def start_month_wizard(cmd: str):
-    """ใช้กับ /run, /sort — ถามแค่เดือน (0 = ไม่ระบุ)"""
+    """ใช้กับ /run — ถามแค่เดือน (0 = ไม่ระบุ)"""
     global PENDING
     PENDING = {"flow": "month_only", "cmd": cmd}
     send("ระบุเดือน (กรณีไม่ระบุ ใส่ 0) >")
@@ -265,6 +267,13 @@ def start_gendoc_wizard():
     """ใช้กับ /genDoc — ถามปี (0=ทุกปี) → เดือน (0=ทั้งปี) → วัน (0=ทั้งเดือน)"""
     global PENDING
     PENDING = {"flow": "scope_cmd", "cmd": "/gendoc", "label": "gen เอกสาร", "step": "year"}
+    send("ระบุปี (กรณีต้องการทุกปี ใส่ 0) >")
+
+
+def start_gen_wizard():
+    """ใช้กับ /gen — ถามปี (0=ทุกปี) → เดือน (0=ทั้งปี) → วัน (0=ทั้งเดือน)"""
+    global PENDING
+    PENDING = {"flow": "scope_cmd", "cmd": "/gen", "label": "gen เอกสาร + transaction", "step": "year"}
     send("ระบุปี (กรณีต้องการทุกปี ใส่ 0) >")
 
 
@@ -368,15 +377,23 @@ def handle_command(text: str):
         from utils.vendor import reload_vendors
         vendors = reload_vendors()
         send(f"✅ Reload vendor สำเร็จ — มี {len(vendors)} รายการ")
-    elif cmd in ("/run", "/sort"):
+    elif cmd == "/run":
         if len(parts) > 1 and parts[1].isdigit():
             month = int(parts[1])
             year  = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
             run_command(cmd, month=month, year=year)
         else:
             start_month_wizard(cmd)
-    elif cmd in ("/gen", "/resync"):
+    elif cmd == "/resync":
         run_command(cmd)
+    elif cmd == "/gen":
+        if len(parts) > 1 and parts[1].lstrip("-").isdigit():
+            year  = int(parts[1].lstrip("-"))
+            month = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+            day   = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+            run_command(cmd, _gendoc_scope(year, month, day))
+        else:
+            start_gen_wizard()
     elif cmd == "/gendoc":
         if len(parts) > 1 and parts[1].lstrip("-").isdigit():
             year  = int(parts[1].lstrip("-"))
@@ -398,8 +415,8 @@ def handle_command(text: str):
             "📋 <b>คำสั่งที่ใช้ได้</b>\n"
             "─────────────────\n"
             "/run   — รัน pipeline ทั้งหมด (ถามเดือนก่อนเริ่ม, 0=ไม่ระบุ) หรือพิมพ์ /run 7 เลยก็ได้\n"
-            "/sort  — อ่าน slip + แยก folder เท่านั้น (ถามเดือนเหมือนกัน)\n"
-            "/gen   — gen PDF เท่านั้น (เฉพาะที่ยังไม่ gen) sync + บันทึก transactions ให้ด้วย\n"
+            "/gen   — /genDoc + /genTransaction ในคำสั่งเดียว: gen เอกสารใหม่ → sync → void แถวเดิม "
+            "+ insert transaction ใหม่ (ถามปี→เดือน→วัน เหมือนกัน หรือพิมพ์ /gen 2026 1 7)\n"
             "/genDoc — gen เอกสารใหม่ (ถามปี[0=ทุกปี]→เดือน[0=ทั้งปี]→วัน[0=ทั้งเดือน] ทีละขั้น)\n"
             "          <b>ไม่บันทึก transactions</b> — ต้อง update sheet เองทีหลัง\n"
             "          หรือพิมพ์ /genDoc 2026 1 7 ตรงๆ (ปี เดือน วัน) ก็ได้\n"

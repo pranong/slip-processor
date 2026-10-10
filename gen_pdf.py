@@ -862,13 +862,15 @@ def regen(scope_value: str) -> dict:
     return result
 
 
-def gen_docs_only(scope_value: str) -> dict:
+def gen_docs_only(scope_value: str, remind_sheet: bool = True) -> dict:
     """
     Regen เอกสาร (PDF) เท่านั้น — reset state → copy metadata local → gen → sync PDF ขึ้น Drive
     **ไม่บันทึก transactions ลง Sheet เลย** (ใช้ /genDoc ฝั่ง Telegram) ส่งข้อความเตือนตอนจบว่า
     อย่าลืม update transaction sheet เอง (ผ่าน `gen_pdf.py --transactions-only SCOPE`)
 
     scope_value: "" = ทุกปีทั้งหมด, "2026" = ทั้งปี, "2026/JAN" = ทั้งเดือน, "2026/JAN/07" = วันเดียว
+    remind_sheet: False = ไม่ต้องเตือนเรื่อง Sheet ตอนจบ (ใช้ตอน /gen ซึ่งบันทึก transactions ต่อให้เอง)
+    result["_sync_ok"] = PDF ขึ้น Drive ครบไหม (False = ถูกเก็บไว้รอ /resync)
     """
     import time, subprocess, tempfile
     from run_pipeline import fmt_duration, sync_output_dir
@@ -910,7 +912,7 @@ def gen_docs_only(scope_value: str) -> dict:
         log(msg)
         notify.send(msg)
         _shutil.rmtree(local_data_root, ignore_errors=True)
-        return {"new": 0, "failed": 0}
+        return {"new": 0, "failed": 0, "_no_metadata": True}
 
     local_data_path = str(local_data_root)
 
@@ -924,6 +926,7 @@ def gen_docs_only(scope_value: str) -> dict:
 
     local_output = result.get("_local_output")
     sync_elapsed = "0 วิ"
+    pdf_ok = True
     if local_output:
         log("\n── Sync PDFs ขึ้น Drive ──")
         notify.send("🔄 กำลัง sync PDF ขึ้น Drive...")
@@ -944,8 +947,9 @@ def gen_docs_only(scope_value: str) -> dict:
         f"📄 gen ใหม่: {result.get('new', 0)}  ❌ ล้มเหลว: {result.get('failed', 0)}\n"
         f"⏱ Gen: {gen_elapsed}\n"
         f"🔄 Sync: {sync_elapsed}\n"
-        f"⏱ รวม: {total_elapsed}\n\n"
-        f"⚠️ <b>อย่าลืม update transaction sheet!</b> คำสั่งนี้ gen เอกสารอย่างเดียว ไม่ได้บันทึกลง Sheet ให้"
+        f"⏱ รวม: {total_elapsed}"
+        + ("\n\n⚠️ <b>อย่าลืม update transaction sheet!</b> คำสั่งนี้ gen เอกสารอย่างเดียว ไม่ได้บันทึกลง Sheet ให้"
+           if remind_sheet else "")
     )
     log(f"\n✅ เสร็จสิ้น — รวม {total_elapsed}")
 
@@ -953,7 +957,35 @@ def gen_docs_only(scope_value: str) -> dict:
     if local_output:
         _shutil.rmtree(local_output, ignore_errors=True)
 
+    result["_sync_ok"] = pdf_ok
     return result
+
+
+def gen_doc_and_transaction(scope_value: str) -> dict:
+    """
+    /gen — ทำ /genDoc แล้วต่อด้วย /genTransaction scope เดียวกันในคำสั่งเดียว (gen เอกสารใหม่ →
+    sync ขึ้น Drive → void แถวเดิม + insert transaction ใหม่) เรียกสองฟังก์ชันเดิมต่อกันตรงๆ
+    ไม่ duplicate logic — แก้พฤติกรรมของ /genDoc หรือ /genTransaction ที่เดียว /gen ได้ตามไปด้วย
+
+    ต้อง gen + sync ก่อนเสมอ เพราะ transaction ต้องหา Drive link ของ PDF — ถ้า sync ไม่ผ่านจะหยุด
+    ไม่แตะ Sheet (กัน void แถวเดิมแล้ว insert แถวใหม่ที่ไม่มี URL)
+    """
+    from utils import notify
+
+    label = scope_value or "ทั้งหมด (ทุกปี)"
+    doc_result = gen_docs_only(scope_value, remind_sheet=False)
+
+    if doc_result.get("_no_metadata"):
+        return doc_result
+    if not doc_result.get("_sync_ok", True):
+        msg = (f"⏸ ข้าม gen transaction (scope: {label}) เพราะ PDF ยังไม่ขึ้น Drive — "
+               f"สั่ง /resync ให้ผ่านก่อน แล้วค่อยสั่ง /genTransaction scope เดิม")
+        log(msg)
+        notify.send(msg)
+        return doc_result
+
+    tx_result = gen_transaction(scope_value)
+    return {**doc_result, **tx_result}
 
 
 def gen_and_sync() -> dict:

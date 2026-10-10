@@ -61,9 +61,12 @@ receipt_url, ref, comment` — `ref` (J) ใช้จับคู่แถวเ
 | `/run` | sort + gen + sync + บันทึก transactions ทั้งหมด |
 | `/genDoc [ปี] [เดือน] [วัน]` | regen เอกสาร (PDF) เท่านั้น — **ไม่บันทึก Sheet** |
 | `/genTransaction [ปี] [เดือน] [วัน]` | void แถวเดิมที่ live (zero amount + comment + ไฮไลต์แดง) แล้ว insert ใหม่จาก metadata — **ไม่ gen PDF** |
+| `/gen [ปี] [เดือน] [วัน]` | `/genDoc` แล้วต่อด้วย `/genTransaction` scope เดียวกันในคำสั่งเดียว (`gen_pdf.gen_doc_and_transaction()`) — ถ้า sync PDF ไม่ผ่านจะหยุด ไม่แตะ Sheet |
 | `/resync` | sync งานที่ค้างใน `data/pending_sync/` ขึ้น Drive ใหม่ (หลัง sync ไม่ผ่าน) แล้วลบ rawFile เฉพาะรูปของรอบนั้น + บันทึก transactions ต่อให้ครบ — **ไม่อ่านสลิปซ้ำ** |
 
-ทั้ง `/genDoc`/`/genTransaction` ใช้ wizard เดียวกัน (ปี 0=ทุกปี→เดือน 0=ทั้งปี→วัน 0=ทั้งเดือน)
+`/sort` ถูกลบออกจาก bot แล้ว (sort ทำผ่าน `/run` เท่านั้น)
+
+ทั้ง `/gen`/`/genDoc`/`/genTransaction` ใช้ wizard เดียวกัน (ปี 0=ทุกปี→เดือน 0=ทั้งปี→วัน 0=ทั้งเดือน)
 implement เป็น flow กลาง `"scope_cmd"` ใน [telegram_bot.py](telegram_bot.py) — เพิ่มคำสั่ง
 scope-wizard ใหม่ให้ reuse flow นี้ ไม่ต้องเขียนใหม่
 
